@@ -15,6 +15,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.umang.fintrack.R
 import com.umang.fintrack.data.FinanceDb
+import com.umang.fintrack.data.SimBooks
 import com.umang.fintrack.data.Transaction
 import com.umang.fintrack.parser.TxnType
 import com.umang.fintrack.ui.CategorizeActivity
@@ -24,6 +25,7 @@ object Notifier {
     private const val CHANNEL = "categorize"
     const val ACTION_ACCEPT = "com.umang.fintrack.ACCEPT"
     const val ACTION_REPOST = "com.umang.fintrack.REPOST"
+    const val ACTION_IGNORE = "com.umang.fintrack.IGNORE"
     const val EXTRA_ID = "txn_id"
 
     fun ensureChannel(context: Context) {
@@ -66,6 +68,11 @@ object Notifier {
             Intent(context, NotificationActionReceiver::class.java).setAction(ACTION_ACCEPT).putExtra(EXTRA_ID, id),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val ignore = PendingIntent.getBroadcast(
+            context, id.toInt(),
+            Intent(context, NotificationActionReceiver::class.java).setAction(ACTION_IGNORE).putExtra(EXTRA_ID, id),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         // If the user swipes the notification away it is posted again: it only goes once a category is chosen.
         val repost = PendingIntent.getBroadcast(
             context, id.toInt(),
@@ -76,6 +83,7 @@ object Notifier {
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title(txn))
+            .setSubText(SimBooks.name(context, txn.sim))
             .setContentText("${txn.merchant ?: txn.sourceLabel} · Suggested: ${txn.suggestedCategory}")
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(
@@ -96,7 +104,8 @@ object Notifier {
             .setFullScreenIntent(open, true)
             .setDeleteIntent(repost)
             .addAction(0, "✓ ${txn.suggestedCategory}", accept)
-            .addAction(0, "Change category", open)
+            .addAction(0, "Change", open)
+            .addAction(0, "Not a transaction", ignore)
             .build()
 
         NotificationManagerCompat.from(context).notify(id.toInt(), notification)
@@ -126,6 +135,10 @@ class NotificationActionReceiver : BroadcastReceiver() {
                         Notifier.cancel(context, id)
                     }
                     Notifier.ACTION_REPOST -> Notifier.show(context, id)
+                    Notifier.ACTION_IGNORE -> {
+                        db.ignore(id)
+                        Notifier.cancel(context, id)
+                    }
                 }
             } finally {
                 pending.finish()

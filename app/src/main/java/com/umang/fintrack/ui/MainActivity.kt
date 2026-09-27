@@ -45,6 +45,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -68,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.umang.fintrack.data.Category
 import com.umang.fintrack.data.FinanceDb
+import com.umang.fintrack.data.SimBooks
 import com.umang.fintrack.data.TRANSFER
 import com.umang.fintrack.data.Transaction
 import com.umang.fintrack.notify.Notifier
@@ -120,16 +123,34 @@ private fun MainScreen(resumeTick: Int) {
     var txns by remember { mutableStateOf<List<Transaction>>(emptyList()) }
     var categories by remember { mutableStateOf<List<Category>>(emptyList()) }
     var pending by remember { mutableStateOf<List<Long>>(emptyList()) }
+    var sim by remember { mutableIntStateOf(SimBooks.selected(context)) }
+    var namesVersion by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(changes, monthOffset, resumeTick) {
+    LaunchedEffect(changes, monthOffset, resumeTick, sim) {
         val (t, c, p) = withContext(Dispatchers.IO) {
-            Triple(db.transactionsBetween(monthStart(monthOffset), monthStart(monthOffset + 1)), db.categories(), db.pendingIds())
+            Triple(db.transactionsBetween(sim, monthStart(monthOffset), monthStart(monthOffset + 1)), db.categories(), db.pendingIds())
         }
         txns = t; categories = c; pending = p
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("FinTrack") }) },
+        topBar = {
+            Column {
+                TopAppBar(title = { Text("FinTrack") })
+                if (tab != Tab.Categories) {
+                    // Each SIM is a separate book of accounts.
+                    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SimBooks.SIMS.forEach { s ->
+                            FilterChip(
+                                selected = sim == s,
+                                onClick = { sim = s; SimBooks.select(context, s) },
+                                label = { Text("📱 " + remember(namesVersion, s) { SimBooks.name(context, s) }) },
+                            )
+                        }
+                    }
+                }
+            }
+        },
         floatingActionButton = {
             if (tab == Tab.Home || tab == Tab.History) {
                 FloatingActionButton(onClick = {
@@ -154,7 +175,7 @@ private fun MainScreen(resumeTick: Int) {
             Tab.Home -> HomeTab(modifier, txns, pending, emojiOf, monthOffset) { monthOffset += it }
             Tab.History -> HistoryTab(modifier, txns, emojiOf, monthOffset) { monthOffset += it }
             Tab.Categories -> CategoriesTab(modifier, categories)
-            Tab.Setup -> SetupTab(modifier, resumeTick)
+            Tab.Setup -> SetupTab(modifier, resumeTick) { namesVersion++ }
         }
     }
 }
@@ -177,12 +198,14 @@ private fun HomeTab(
     monthOffset: Int, onShift: (Int) -> Unit,
 ) {
     val context = LocalContext.current
-    val counted = txns.filter { it.effectiveCategory() != TRANSFER }
-    val spent = counted.filter { it.type == TxnType.DEBIT }.sumOf { it.amount }
-    val received = counted.filter { it.type == TxnType.CREDIT }.sumOf { it.amount }
+    val live = txns.filter { !it.ignored }
+    val counted = live.filter { it.effectiveCategory() != TRANSFER }
+    val spent = counted.filter { it.type == TxnType.DEBIT }.sumOf { it.countedAmount }
+    val received = counted.filter { it.type == TxnType.CREDIT }.sumOf { it.countedAmount }
+    val forOthers = counted.filter { it.type == TxnType.DEBIT }.sumOf { it.othersShare }
     val byCategory = counted.filter { it.type == TxnType.DEBIT }.groupBy { it.effectiveCategory() }
-        .mapValues { (_, v) -> v.sumOf { it.amount } }.entries.sortedByDescending { it.value }
-    val byAccount = txns.filter { it.type == TxnType.DEBIT }.groupBy { it.sourceLabel }
+        .mapValues { (_, v) -> v.sumOf { it.countedAmount } }.entries.sortedByDescending { it.value }
+    val byAccount = live.filter { it.type == TxnType.DEBIT }.groupBy { it.sourceLabel }
         .mapValues { (_, v) -> v.sumOf { it.amount } to v.size }.entries.sortedByDescending { it.value.first }
 
     LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -202,8 +225,14 @@ private fun HomeTab(
             }
         }
         item {
-            Text("Net: ${formatMoney(received - spent)}  ·  ${txns.size} transactions  ·  transfers excluded",
-                style = MaterialTheme.typography.bodySmall)
+            Column {
+                Text("Net: ${formatMoney(received - spent)}  ·  ${live.size} transactions  ·  transfers excluded",
+                    style = MaterialTheme.typography.bodySmall)
+                if (forOthers > 0) {
+                    Text("Paid for others in group bills: ${formatMoney(forOthers)} (not in Spent)",
+                        style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
         if (byCategory.isNotEmpty()) {
             item { Text("Spending by category", style = MaterialTheme.typography.titleMedium) }
@@ -221,7 +250,7 @@ private fun HomeTab(
             }
         }
         if (byAccount.isNotEmpty()) {
-            item { Text("Spending by bank / card", style = MaterialTheme.typography.titleMedium) }
+            item { Text("Paid by bank / card (full amounts)", style = MaterialTheme.typography.titleMedium) }
             items(byAccount, key = { "a" + it.key }) { (label, v) ->
                 Row {
                     Text(label, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -229,7 +258,7 @@ private fun HomeTab(
                 }
             }
         }
-        if (txns.isEmpty()) item {
+        if (live.isEmpty()) item {
             Text("No transactions this month yet. New bank SMS will show up here automatically — " +
                 "or import past SMS from the Setup tab.", style = MaterialTheme.typography.bodyMedium)
         }
@@ -251,14 +280,23 @@ private fun HistoryTab(
     modifier: Modifier, txns: List<Transaction>, emojiOf: Map<String, String>, monthOffset: Int, onShift: (Int) -> Unit,
 ) {
     val context = LocalContext.current
-    var filter by remember { mutableStateOf<TxnType?>(null) }
-    val shown = txns.filter { filter == null || it.type == filter }
+    // null = all, "DEBIT", "CREDIT", "SPLIT" (group bills) or "IGNORED" (not counted).
+    var filter by remember { mutableStateOf<String?>(null) }
+    val shown = txns.filter {
+        when (filter) {
+            null -> !it.ignored
+            "IGNORED" -> it.ignored
+            "SPLIT" -> !it.ignored && it.myShare != null
+            else -> !it.ignored && it.type.name == filter
+        }
+    }
     LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { MonthSwitcher(monthOffset, onShift) }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(null to "All", TxnType.DEBIT to "Debits", TxnType.CREDIT to "Credits").forEach { (t, label) ->
-                    androidx.compose.material3.FilterChip(selected = filter == t, onClick = { filter = t }, label = { Text(label) })
+            androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(listOf(null to "All", "DEBIT" to "Debits", "CREDIT" to "Credits", "SPLIT" to "Group bills",
+                    "IGNORED" to "Not counted")) { (t, label) ->
+                    FilterChip(selected = filter == t, onClick = { filter = t }, label = { Text(label) })
                 }
             }
         }
@@ -275,10 +313,16 @@ private fun HistoryTab(
                                 style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 color = if (t.pending) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            t.myShare?.let {
+                                Text("My share ${formatMoney(it)} of ${formatMoney(t.amount)}",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            }
+                            if (t.ignored) Text("Not counted", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error)
                             t.note?.let { Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 1) }
                         }
                         Text(
-                            (if (t.type == TxnType.DEBIT) "−" else "+") + formatMoney(t.amount),
+                            (if (t.type == TxnType.DEBIT) "−" else "+") + formatMoney(t.countedAmount),
                             color = if (t.type == TxnType.DEBIT) DebitRed else CreditGreen, fontWeight = FontWeight.Bold,
                         )
                     }
@@ -336,7 +380,7 @@ private fun granted(context: Context, permission: String) =
     ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
 @Composable
-private fun SetupTab(modifier: Modifier, resumeTick: Int) {
+private fun SetupTab(modifier: Modifier, resumeTick: Int, onNamesChanged: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tick by remember { mutableIntStateOf(0) }
@@ -385,6 +429,7 @@ private fun SetupTab(modifier: Modifier, resumeTick: Int) {
             Text("If Android says the SMS permission is a \"restricted setting\": open App info → ⋮ menu → " +
                 "\"Allow restricted settings\", then come back and tap Allow again.", style = MaterialTheme.typography.bodySmall)
         }
+        item { SimNamesCard(onNamesChanged) }
         item {
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -415,6 +460,31 @@ private fun PermissionRow(title: String, subtitle: String, ok: Boolean, onGrant:
             }
             if (ok) Text("✓ On", color = CreditGreen, fontWeight = FontWeight.Bold)
             else Button(onClick = onGrant) { Text("Allow") }
+        }
+    }
+}
+
+@Composable
+private fun SimNamesCard(onNamesChanged: () -> Unit) {
+    val context = LocalContext.current
+    val names = remember { SimBooks.SIMS.associateWith { SimBooks.name(context, it) }.toMutableMap() }
+    var edits by remember { mutableStateOf(names.toMap()) }
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("SIM books", style = MaterialTheme.typography.titleMedium)
+            Text("Each SIM keeps completely separate accounts. SMS go to the book of the SIM they arrive on; " +
+                "you can move one to the other book from its ✎ Edit details.", style = MaterialTheme.typography.bodySmall)
+            SimBooks.SIMS.forEach { s ->
+                OutlinedTextField(
+                    value = edits[s] ?: "", onValueChange = { v -> edits = edits + (s to v) },
+                    label = { Text("Name for SIM $s") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Button(onClick = {
+                edits.forEach { (s, n) -> SimBooks.setName(context, s, n) }
+                onNamesChanged()
+                Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
+            }) { Text("Save names") }
         }
     }
 }

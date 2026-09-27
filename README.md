@@ -19,6 +19,15 @@ debit and credit under a category.
   one-tap "✓ \<suggested category\>" button.
 - **Learns**: once you file a merchant under a category, it suggests that category for that
   merchant from then on.
+- **Two SIMs, two separate books**: each SMS is filed under the SIM it arrived on. You can
+  name the books (e.g. "Personal" / "Business") in Setup and switch between them at the top of
+  the screen. An entry can be moved to the other book from ✎ Edit details.
+- **Card bill and statement reminders are skipped** (total/min amount due, due date, pay now,
+  statements). If something still slips through, tap **✕ Not a transaction – don't count** in
+  the pop-up or the notification. It stays out of every total, and you can bring it back from
+  History → Not counted.
+- **Group bills**: turn on *Group bill / split* in the pop-up and enter your share (or tap ½, ⅓,
+  ¼, ⅕). Only your share counts as spending; the rest is shown as "paid for others".
 - **Home**: spent and received for each month, spending by category, and spending by
   bank/card. Transfers are left out of the totals.
 - **History, custom categories, cash entries** (the ＋ button), and an import of the **last

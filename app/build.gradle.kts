@@ -12,8 +12,19 @@ android {
         applicationId = "com.umang.fintrack"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    // A fixed key committed to the repo, so every CI build can be installed as an update
+    // over the previous one (a random per-build key would force an uninstall each time).
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {

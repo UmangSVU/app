@@ -46,6 +46,16 @@ object SmsParser {
             """insufficient (?:funds|balance)|to be debited)\b"""
     )
 
+    // Credit card bill / statement reminders: they quote amounts but no money has moved.
+    private val BILL_REMINDER = Regex(
+        """(?i)\b(?:(?:min(?:imum)?|total|tot)\.?\s*(?:amt|amount)?\.?\s*(?:due|payable)|(?:amt|amount)\s*(?:due|payable)|""" +
+            """due\s*(?:dt|date|amt|amount)|overdue|past due|payment reminder|bill reminder|gentle reminder|""" +
+            """reminder|e-?statement|statement (?:for|of|dated|generated|is ready|has been|period)|""" +
+            """bill (?:is |has been )?generated|bill for .{0,30}(?:is|of)|pay (?:now|by|before|your (?:bill|dues|outstanding))|""" +
+            """last date|to avoid (?:late|interest|charges)|late (?:payment )?fee|""" +
+            """outstanding (?:amount|amt|of|is))\b"""
+    )
+
     // Removed before deciding debit/credit so "Credit Card spent Rs 500" is not read as a credit.
     private val TYPE_NOISE = Regex("""(?i)\b(?:credit|debit)\s*card\b|\bcredit\s*limit\b|\bdebit\s*limit\b""")
 
@@ -161,7 +171,7 @@ object SmsParser {
 
     fun parse(sender: String?, body: String): ParsedSms? {
         val text = body.replace(' ', ' ').replace(Regex("""\s+"""), " ").trim()
-        if (text.isEmpty() || IGNORE.containsMatchIn(text)) return null
+        if (text.isEmpty() || IGNORE.containsMatchIn(text) || isBillReminder(text)) return null
 
         val type = detectType(text) ?: return null
         val amount = detectAmount(text) ?: return null
@@ -200,6 +210,11 @@ object SmsParser {
             availableLimit = LIMIT.find(text)?.groupValues?.get(1)?.let(::toDouble),
         )
     }
+
+    /** True for card bill / statement reminders (but not "payment received towards your card"). */
+    fun isBillReminder(text: String): Boolean =
+        BILL_REMINDER.containsMatchIn(text) && !PAYMENT_RECEIVED.containsMatchIn(text) &&
+            !Regex("""(?i)\b(?:spent|debited|credited|withdrawn|paid to|sent)\b""").containsMatchIn(text)
 
     private fun toDouble(s: String): Double? = s.replace(",", "").trimEnd('.').toDoubleOrNull()
 

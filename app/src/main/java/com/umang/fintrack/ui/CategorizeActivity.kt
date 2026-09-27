@@ -35,6 +35,8 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -56,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.umang.fintrack.data.Category
 import com.umang.fintrack.data.FinanceDb
+import com.umang.fintrack.data.SimBooks
 import com.umang.fintrack.data.Transaction
 import com.umang.fintrack.notify.Notifier
 import com.umang.fintrack.parser.CategorySuggester
@@ -133,7 +136,9 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
     var editing by remember(id) { mutableStateOf(manual) }
     var showSms by remember(id) { mutableStateOf(false) }
     var addingCategory by remember { mutableStateOf(false) }
-    var confirmIgnore by remember { mutableStateOf(false) }
+    var sim by remember(id) { mutableStateOf(SimBooks.selected(context)) }
+    var splitOn by remember(id) { mutableStateOf(false) }
+    var myShareText by remember(id) { mutableStateOf("") }
     var categoriesVersion by remember { mutableStateOf(0) }
 
     LaunchedEffect(id) {
@@ -141,10 +146,13 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
         if (!manual && t == null) { onDone(withContext(Dispatchers.IO) { db.pendingIds().firstOrNull() }); return@LaunchedEffect }
         txn = t
         selected = t?.category ?: t?.suggestedCategory ?: CategorySuggester.OTHER
-        amountText = t?.amount?.let { if (it % 1.0 == 0.0) it.toLong().toString() else it.toString() } ?: ""
+        amountText = t?.amount?.let(::plain) ?: ""
         merchant = t?.merchant ?: ""
         type = t?.type ?: TxnType.DEBIT
         note = t?.note ?: ""
+        sim = t?.sim ?: SimBooks.selected(context)
+        splitOn = t?.myShare != null
+        myShareText = t?.myShare?.let(::plain) ?: ""
         loaded = true
     }
     LaunchedEffect(id, categoriesVersion) {
@@ -189,6 +197,14 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
                     (if (type == TxnType.DEBIT) "− " else "+ ") + formatMoney(amountText.toDoubleOrNull() ?: 0.0),
                     fontSize = 34.sp, fontWeight = FontWeight.Bold, color = color,
                 )
+                Text(
+                    "📱 ${SimBooks.name(context, sim)}" + (if (SimBooks.name(context, sim) != "SIM $sim") " (SIM $sim)" else ""),
+                    style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                )
+                if (txn?.ignored == true) {
+                    Text("Currently not counted. Submit to count it again.", color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall)
+                }
                 txn?.let { t ->
                     Text(
                         (if (t.type == TxnType.DEBIT) "Debited" else "Credited") + " · " + formatDateTime(t.timestamp),
@@ -201,6 +217,12 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
                     TextButton(onClick = { editing = !editing }) { Text(if (editing) "Hide edit" else "✎ Edit details") }
                 }
                 if (editing) {
+                    Text("Book", style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SimBooks.SIMS.forEach { s ->
+                            FilterChip(selected = sim == s, onClick = { sim = s }, label = { Text(SimBooks.name(context, s)) })
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(selected = type == TxnType.DEBIT, onClick = { type = TxnType.DEBIT }, label = { Text("Debit / Spent") })
                         FilterChip(selected = type == TxnType.CREDIT, onClick = { type = TxnType.CREDIT }, label = { Text("Credit / Received") })
@@ -234,6 +256,46 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
                 }
                 txn?.suggestedCategory?.let { Text("Suggested: $it", style = MaterialTheme.typography.labelSmall) }
 
+                val total = amountText.toDoubleOrNull() ?: 0.0
+                val myShare = myShareText.toDoubleOrNull()
+                if (type == TxnType.DEBIT) {
+                    HorizontalDivider()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Group bill / split", style = MaterialTheme.typography.titleSmall)
+                            Text("Count only your share; the rest is shown as paid for others.",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = splitOn, onCheckedChange = {
+                            splitOn = it
+                            if (it && myShareText.isBlank() && total > 0) myShareText = plain(total / 2)
+                        })
+                    }
+                    if (splitOn) {
+                        OutlinedTextField(
+                            value = myShareText,
+                            onValueChange = { myShareText = it.filter { c -> c.isDigit() || c == '.' } },
+                            label = { Text("My share (₹)") }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            isError = myShare == null || myShare > total,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(2 to "½", 3 to "⅓", 4 to "¼", 5 to "⅕").forEach { (n, label) ->
+                                AssistChip(onClick = { myShareText = plain(Math.round(total / n * 100) / 100.0) },
+                                    label = { Text("$label ($n people)") })
+                            }
+                        }
+                        if (myShare != null && myShare <= total) {
+                            Text("Counted: ${formatMoney(myShare)}  ·  Paid for others: ${formatMoney(total - myShare)}",
+                                style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        } else {
+                            Text("Your share must be between ₹0 and ${formatMoney(total)}",
+                                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = note, onValueChange = { note = it }, label = { Text("Note (optional)") },
                     modifier = Modifier.fillMaxWidth(),
@@ -258,18 +320,21 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
                 }
 
                 Button(
-                    enabled = selected != null && (amountText.toDoubleOrNull() ?: 0.0) > 0.0,
+                    enabled = selected != null && total > 0.0 &&
+                        (!splitOn || type != TxnType.DEBIT || (myShare != null && myShare <= total)),
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {
                         val category = selected ?: return@Button
                         val amount = amountText.toDoubleOrNull() ?: return@Button
+                        val share = if (splitOn && type == TxnType.DEBIT) myShare else null
+                        SimBooks.select(context, sim)
                         scope.launch {
                             val next = withContext(Dispatchers.IO) {
                                 if (manual) {
-                                    db.insertManual(amount, type, merchant.ifBlank { null }, category, note.ifBlank { null })
+                                    db.insertManual(amount, type, merchant.ifBlank { null }, category, note.ifBlank { null }, sim, share)
                                     null
                                 } else {
-                                    db.categorize(id, category, note, amount, merchant, type, rememberChoice)
+                                    db.categorize(id, category, note, amount, merchant, type, rememberChoice, sim, share)
                                     Notifier.cancel(context, id)
                                     if (locked) db.pendingIds().firstOrNull() else null
                                 }
@@ -279,14 +344,24 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
                     },
                 ) { Text("Submit") }
 
-                Row {
-                    if (!locked) TextButton(onClick = onClose) { Text("Cancel") }
-                    if (!manual) {
-                        TextButton(onClick = { confirmIgnore = true }) {
-                            Text(if (locked) "Not a transaction" else "Delete", color = MaterialTheme.colorScheme.error)
-                        }
-                    }
+                if (!manual && txn?.ignored != true) {
+                    // For bill reminders, OTP-like messages or anything that isn't real spending.
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            scope.launch {
+                                val next = withContext(Dispatchers.IO) {
+                                    db.ignore(id); Notifier.cancel(context, id)
+                                    if (locked) db.pendingIds().firstOrNull() else null
+                                }
+                                Toast.makeText(context, "Not counted. You can restore it from History → Not counted.",
+                                    Toast.LENGTH_SHORT).show()
+                                onDone(next)
+                            }
+                        },
+                    ) { Text("✕ Not a transaction – don't count", color = MaterialTheme.colorScheme.error) }
                 }
+                if (!locked) TextButton(onClick = onClose) { Text("Cancel") }
             }
         }
     }
@@ -304,27 +379,9 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
             },
         )
     }
-    if (confirmIgnore) {
-        AlertDialog(
-            onDismissRequest = { confirmIgnore = false },
-            title = { Text(if (locked) "Not a transaction?" else "Delete transaction?") },
-            text = { Text("This entry will be deleted.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmIgnore = false
-                    scope.launch {
-                        val next = withContext(Dispatchers.IO) {
-                            db.delete(id); Notifier.cancel(context, id)
-                            if (locked) db.pendingIds().firstOrNull() else null
-                        }
-                        onDone(next)
-                    }
-                }) { Text("Delete") }
-            },
-            dismissButton = { TextButton(onClick = { confirmIgnore = false }) { Text("Keep") } },
-        )
-    }
 }
+
+private fun plain(v: Double): String = if (v % 1.0 == 0.0) v.toLong().toString() else String.format(java.util.Locale.US, "%.2f", v).trimEnd('0')
 
 @Composable
 private fun Details(t: Transaction) {

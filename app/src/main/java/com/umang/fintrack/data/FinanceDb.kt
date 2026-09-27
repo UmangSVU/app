@@ -32,7 +32,18 @@ data class Transaction(
     val pending: Boolean,
     val sender: String?,
     val body: String?,
+    /** Which SIM's book this belongs to: 1 or 2. */
+    val sim: Int,
+    /** For a group bill: the part that is really yours. Null = the whole amount. */
+    val myShare: Double?,
+    /** Marked "not a transaction": kept (so re-imports skip it) but never counted. */
+    val ignored: Boolean,
 ) {
+    /** The amount that counts towards your totals. */
+    val countedAmount: Double get() = myShare ?: amount
+    /** Paid on behalf of others in a group bill. */
+    val othersShare: Double get() = myShare?.let { (amount - it).coerceAtLeast(0.0) } ?: 0.0
+
     /** "HDFC Bank · Credit Card XX4321" */
     val sourceLabel: String
         get() = listOfNotNull(bank, listOfNotNull(instrument, account).joinToString(" ").ifBlank { null })
@@ -45,7 +56,7 @@ data class Category(val name: String, val emoji: String, val kind: String)
 const val TRANSFER = "Transfer"
 
 class FinanceDb private constructor(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "fintrack.db", null, 1) {
+    SQLiteOpenHelper(context.applicationContext, "fintrack.db", null, 2) {
 
     companion object {
         @Volatile private var instance: FinanceDb? = null
@@ -94,6 +105,7 @@ class FinanceDb private constructor(context: Context) :
                 category TEXT, suggested_category TEXT NOT NULL, note TEXT,
                 pending INTEGER NOT NULL DEFAULT 1)"""
         )
+        addV2Columns(db)
         db.execSQL("CREATE INDEX idx_txn_time ON transactions(timestamp)")
         db.execSQL("CREATE TABLE categories (name TEXT PRIMARY KEY, emoji TEXT NOT NULL, kind TEXT NOT NULL, sort INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE merchant_rules (merchant_key TEXT PRIMARY KEY, category TEXT NOT NULL)")
@@ -104,7 +116,21 @@ class FinanceDb private constructor(context: Context) :
         }
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            addV2Columns(db)
+            // Learned rules become per-SIM; old ones apply to SIM 1.
+            db.execSQL("UPDATE merchant_rules SET merchant_key = '1|' || merchant_key")
+        }
+    }
+
+    private fun addV2Columns(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE transactions ADD COLUMN sim INTEGER NOT NULL DEFAULT 1")
+        db.execSQL("ALTER TABLE transactions ADD COLUMN my_share REAL")
+        db.execSQL("ALTER TABLE transactions ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0")
+    }
+
+    private fun ruleKey(sim: Int, merchantKey: String) = "$sim|$merchantKey"
 
     // ---------- SMS ingestion ----------
 
@@ -112,7 +138,7 @@ class FinanceDb private constructor(context: Context) :
      * Parses an SMS and stores it. Returns the new transaction id, or null when the SMS is not a
      * transaction or was already stored.
      */
-    fun insertFromSms(sender: String?, body: String, timestamp: Long, pending: Boolean = true): Long? {
+    fun insertFromSms(sender: String?, body: String, timestamp: Long, sim: Int, pending: Boolean = true): Long? {
         val parsed = SmsParser.parse(sender, body) ?: return null
         // The inbox copy of an SMS can carry a slightly different time than the live broadcast.
         val duplicate = readableDatabase.rawQuery(
@@ -120,11 +146,11 @@ class FinanceDb private constructor(context: Context) :
             arrayOf(body, timestamp.toString())
         ).use { it.moveToFirst() }
         if (duplicate) return null
-        val learned = CategorySuggester.merchantKey(parsed)?.let(::learnedCategory)
+        val learned = CategorySuggester.merchantKey(parsed)?.let { learnedCategory(ruleKey(sim, it)) }
         val suggested = CategorySuggester.suggest(parsed, body, learned)
         val values = ContentValues().apply {
             put("sms_hash", hash("$sender|$body|$timestamp"))
-            put("sender", sender); put("body", body); put("timestamp", timestamp)
+            put("sender", sender); put("body", body); put("timestamp", timestamp); put("sim", sim)
             put("amount", parsed.amount); put("type", parsed.type.name)
             put("bank", parsed.bank); put("account", parsed.account); put("instrument", parsed.instrument)
             put("mode", parsed.mode); put("merchant", parsed.merchant); put("upi_id", parsed.upiId)
@@ -140,11 +166,13 @@ class FinanceDb private constructor(context: Context) :
         return id
     }
 
-    fun insertManual(amount: Double, type: TxnType, merchant: String?, category: String, note: String?): Long {
+    fun insertManual(
+        amount: Double, type: TxnType, merchant: String?, category: String, note: String?, sim: Int, myShare: Double?,
+    ): Long {
         val id = writableDatabase.insert("transactions", null, ContentValues().apply {
             put("timestamp", System.currentTimeMillis()); put("amount", amount); put("type", type.name)
             put("merchant", merchant); put("category", category); put("suggested_category", category)
-            put("note", note); put("pending", 0); put("mode", "Cash")
+            put("note", note); put("pending", 0); put("mode", "Cash"); put("sim", sim); put("my_share", myShare)
         })
         changed()
         return id
@@ -163,10 +191,16 @@ class FinanceDb private constructor(context: Context) :
         merchant: String? = null,
         type: TxnType? = null,
         remember: Boolean = true,
+        sim: Int? = null,
+        myShare: Double? = null,
     ) {
         val db = writableDatabase
         db.update("transactions", ContentValues().apply {
-            put("category", category); put("pending", 0)
+            put("category", category); put("pending", 0); put("ignored", 0)
+            // Only a real partial share is stored; a full or empty share means "all mine".
+            val a = amount ?: getTransaction(id)?.amount
+            put("my_share", myShare?.takeIf { a != null && it >= 0 && it < a })
+            if (sim != null) put("sim", sim)
             if (note != null) put("note", note.ifBlank { null })
             if (amount != null) put("amount", amount)
             if (merchant != null) put("merchant", merchant.ifBlank { null })
@@ -176,10 +210,18 @@ class FinanceDb private constructor(context: Context) :
             val txn = getTransaction(id)
             CategorySuggester.merchantKey(txn?.merchant ?: txn?.upiId)?.let { key ->
                 db.insertWithOnConflict("merchant_rules", null, ContentValues().apply {
-                    put("merchant_key", key); put("category", category)
+                    put("merchant_key", ruleKey(txn?.sim ?: 1, key)); put("category", category)
                 }, SQLiteDatabase.CONFLICT_REPLACE)
             }
         }
+        changed()
+    }
+
+    /** "Not a transaction": stop asking and leave it out of every total. */
+    fun ignore(id: Long) {
+        writableDatabase.update("transactions", ContentValues().apply {
+            put("ignored", 1); put("pending", 0)
+        }, "id = ?", arrayOf(id.toString()))
         changed()
     }
 
@@ -205,10 +247,11 @@ class FinanceDb private constructor(context: Context) :
             buildList { while (it.moveToNext()) add(it.getLong(0)) }
         }
 
-    fun transactionsBetween(from: Long, to: Long): List<Transaction> =
+    /** Everything in one SIM's book for a period, including ignored entries (callers filter). */
+    fun transactionsBetween(sim: Int, from: Long, to: Long): List<Transaction> =
         readableDatabase.rawQuery(
-            "SELECT * FROM transactions WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp DESC",
-            arrayOf(from.toString(), to.toString())
+            "SELECT * FROM transactions WHERE sim = ? AND timestamp >= ? AND timestamp < ? ORDER BY timestamp DESC",
+            arrayOf(sim.toString(), from.toString(), to.toString())
         ).use { buildList { while (it.moveToNext()) add(it.toTransaction()) } }
 
     fun categories(): List<Category> =
@@ -245,5 +288,7 @@ class FinanceDb private constructor(context: Context) :
         category = str("category"), suggestedCategory = str("suggested_category") ?: CategorySuggester.OTHER,
         note = str("note"), pending = getInt(getColumnIndexOrThrow("pending")) == 1,
         sender = str("sender"), body = str("body"),
+        sim = getInt(getColumnIndexOrThrow("sim")), myShare = dbl("my_share"),
+        ignored = getInt(getColumnIndexOrThrow("ignored")) == 1,
     )
 }

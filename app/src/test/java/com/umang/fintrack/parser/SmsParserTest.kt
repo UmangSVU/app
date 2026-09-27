@@ -190,4 +190,23 @@ class SmsParserTest {
         assertEquals("XX4321", p.account)
         assertEquals("Transfer", CategorySuggester.suggest(p, body, null))
     }
+
+    @Test
+    fun ignoresCreditCardBillReminders() {
+        listOf(
+            "Statement for HDFC Bank Credit Card XX4321: Total Amt Due Rs.12,450.00, Min Amt Due Rs.630.00, " +
+                "Due Dt 05-Oct-26. Pay via NetBanking/UPI.",
+            "Reminder: Your ICICI Bank Credit Card XX1111 bill of INR 8,200.00 is pending. Pay now to avoid late fee.",
+            "Your SBI Card ending 5566 e-statement has been sent. Total Amount Due: Rs 3,499; Minimum Due: Rs 200.",
+            "Axis Bank Credit Card XX9090 bill generated. Amount payable Rs 15,000.00. Last date 10-10-2026.",
+            "Gentle reminder: Rs 2,300 outstanding on your Kotak Credit Card XX7788 is overdue. Kindly pay.",
+        ).forEach { assertNull(it, SmsParser.parse("VM-HDFCBK", it)) }
+    }
+
+    @Test
+    fun cardSpendWithDueWordsStillParses() {
+        // A real spend SMS must survive even if it happens to mention the bill.
+        val p = parse("AD-HDFCBK", "Rs.500.00 spent on HDFC Bank Credit Card XX4321 at ZOMATO on 27-09-26. Avl Lmt Rs.10,000")
+        assertEquals(500.0, p.amount, 0.001)
+    }
 }

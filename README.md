@@ -28,9 +28,10 @@ Everything stays on the phone in a local SQLite database. There's no internet pe
 
 ## Install on your phone
 
-1. Open the repository's **Actions** tab → latest **Build APK** run → download the
-   `FinTrack-apk` artifact (a zip with `app-debug.apk`).
-2. Copy it to your phone and open it (allow "Install unknown apps" for your file manager).
+1. On your phone, open
+   **https://github.com/UmangSVU/app/releases/latest/download/FinTrack.apk**
+   (or go to the repo's **Releases** section and tap `FinTrack.apk`).
+2. Open the downloaded file and allow "Install unknown apps" for your browser when asked.
 3. Open FinTrack → **Setup** tab and allow:
    1. **SMS**. On Android 13+ a sideloaded app may be blocked with *"Restricted setting"*.
       Go to *Settings → Apps → FinTrack → ⋮ → Allow restricted settings*, then tap Allow

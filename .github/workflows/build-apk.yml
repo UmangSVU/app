@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,8 +20,20 @@ jobs:
       - name: Unit tests (SMS parser)
         run: ./gradlew --no-daemon testDebugUnitTest
       - name: Build APK
-        run: ./gradlew --no-daemon assembleDebug
+        run: |
+          ./gradlew --no-daemon assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk FinTrack.apk
       - uses: actions/upload-artifact@v4
         with:
           name: FinTrack-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: FinTrack.apk
+      # Publishes the APK at a fixed link you can open on your phone:
+      # https://github.com/<owner>/<repo>/releases/latest/download/FinTrack.apk
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-apk
+          name: FinTrack (latest build)
+          body: "Latest FinTrack build from `${{ github.ref_name }}` (${{ github.sha }}). Download **FinTrack.apk** below and open it on your Android phone."
+          make_latest: true
+          files: FinTrack.apk

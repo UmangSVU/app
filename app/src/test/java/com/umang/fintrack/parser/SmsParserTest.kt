@@ -188,7 +188,7 @@ class SmsParserTest {
         val p = parse("VM-HDFCBK", body)
         assertEquals(TxnType.CREDIT, p.type)
         assertEquals("XX4321", p.account)
-        assertEquals("Transfer", CategorySuggester.suggest(p, body, null))
+        assertEquals("Transfer In", CategorySuggester.suggest(p, body, null))
     }
 
     @Test

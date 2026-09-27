@@ -14,7 +14,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -71,7 +79,9 @@ import androidx.core.content.ContextCompat
 import com.umang.fintrack.data.Category
 import com.umang.fintrack.data.FinanceDb
 import com.umang.fintrack.data.SimBooks
-import com.umang.fintrack.data.TRANSFER
+import com.umang.fintrack.data.TRANSFER_CATEGORIES
+import com.umang.fintrack.data.KIND_EXPENSE
+import com.umang.fintrack.data.KIND_INCOME
 import com.umang.fintrack.data.Transaction
 import com.umang.fintrack.notify.Notifier
 import com.umang.fintrack.parser.CategorySuggester
@@ -172,7 +182,7 @@ private fun MainScreen(resumeTick: Int) {
         val modifier = Modifier.padding(padding).fillMaxSize()
         val emojiOf = categories.associate { it.name to it.emoji }
         when (tab) {
-            Tab.Home -> HomeTab(modifier, txns, pending, emojiOf, monthOffset) { monthOffset += it }
+            Tab.Home -> HomeTab(modifier, txns, pending, categories, monthOffset) { monthOffset += it }
             Tab.History -> HistoryTab(modifier, txns, emojiOf, monthOffset) { monthOffset += it }
             Tab.Categories -> CategoriesTab(modifier, categories)
             Tab.Setup -> SetupTab(modifier, resumeTick) { namesVersion++ }
@@ -194,21 +204,48 @@ private fun Transaction.effectiveCategory() = category ?: suggestedCategory
 
 @Composable
 private fun HomeTab(
-    modifier: Modifier, txns: List<Transaction>, pending: List<Long>, emojiOf: Map<String, String>,
+    modifier: Modifier, txns: List<Transaction>, pending: List<Long>, categories: List<Category>,
     monthOffset: Int, onShift: (Int) -> Unit,
 ) {
     val context = LocalContext.current
-    val live = txns.filter { !it.ignored }
-    val counted = live.filter { it.effectiveCategory() != TRANSFER }
-    val spent = counted.filter { it.type == TxnType.DEBIT }.sumOf { it.countedAmount }
-    val received = counted.filter { it.type == TxnType.CREDIT }.sumOf { it.countedAmount }
-    val forOthers = counted.filter { it.type == TxnType.DEBIT }.sumOf { it.othersShare }
-    val byCategory = counted.filter { it.type == TxnType.DEBIT }.groupBy { it.effectiveCategory() }
-        .mapValues { (_, v) -> v.sumOf { it.countedAmount } }.entries.sortedByDescending { it.value }
-    val byAccount = live.filter { it.type == TxnType.DEBIT }.groupBy { it.sourceLabel }
-        .mapValues { (_, v) -> v.sumOf { it.amount } to v.size }.entries.sortedByDescending { it.value.first }
+    val emojiOf = categories.associate { it.name to it.emoji }
+    val colorOf = { name: String -> categoryColor(categories.indexOfFirst { it.name == name }.takeIf { it >= 0 } ?: name.hashCode()) }
 
-    LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val live = txns.filter { !it.ignored }
+    val counted = live.filter { it.effectiveCategory() !in TRANSFER_CATEGORIES }
+    val debits = counted.filter { it.type == TxnType.DEBIT }
+    val credits = counted.filter { it.type == TxnType.CREDIT }
+    val transfers = live.filter { it.effectiveCategory() in TRANSFER_CATEGORIES }
+    val spent = debits.sumOf { it.countedAmount }
+    val received = credits.sumOf { it.countedAmount }
+    val forOthers = debits.sumOf { it.othersShare }
+
+    fun categoryGroups(list: List<Transaction>, total: Double, amountColor: Color) =
+        list.groupBy { it.effectiveCategory() }.map { (name, v) ->
+            val sum = v.sumOf { it.countedAmount }
+            BreakdownGroup(
+                key = name, title = "${emojiOf[name] ?: "🏷️"} $name", color = colorOf(name),
+                amount = sum, amountColor = amountColor,
+                subtitle = "${v.size} transaction${if (v.size == 1) "" else "s"} · ${percent(sum, total)}",
+                fraction = if (total > 0) (sum / total).toFloat() else 0f,
+                txns = v.sortedByDescending { it.timestamp }, showCategory = false,
+            )
+        }.sortedByDescending { it.amount }
+
+    val accountGroups = live.groupBy { it.sourceLabel }.entries
+        .sortedByDescending { (_, v) -> v.sumOf { it.amount } }
+        .mapIndexed { i, (label, v) ->
+            val out = v.filter { it.type == TxnType.DEBIT }.sumOf { it.amount }
+            val inn = v.filter { it.type == TxnType.CREDIT }.sumOf { it.amount }
+            BreakdownGroup(
+                key = label, title = "🏦 $label", color = categoryColor(i + 3),
+                amount = inn - out, amountColor = if (inn - out >= 0) CreditGreen else DebitRed,
+                subtitle = "Out ${formatMoney(out)} · In ${formatMoney(inn)} · ${v.size} txns",
+                fraction = null, txns = v.sortedByDescending { it.timestamp }, showCategory = true,
+            )
+        }
+
+    LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (pending.isNotEmpty()) item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -221,12 +258,15 @@ private fun HomeTab(
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatCard("Spent", spent, DebitRed, Modifier.weight(1f))
-                StatCard("Received", received, CreditGreen, Modifier.weight(1f))
+                StatCard("Income", received, CreditGreen, Modifier.weight(1f))
             }
         }
         item {
             Column {
-                Text("Net: ${formatMoney(received - spent)}  ·  ${live.size} transactions  ·  transfers excluded",
+                val net = received - spent
+                Text("Saved this month: ${formatMoney(net)}", fontWeight = FontWeight.SemiBold,
+                    color = if (net >= 0) CreditGreen else DebitRed)
+                Text("${live.size} transactions · transfers between your own accounts are not counted",
                     style = MaterialTheme.typography.bodySmall)
                 if (forOthers > 0) {
                     Text("Paid for others in group bills: ${formatMoney(forOthers)} (not in Spent)",
@@ -234,33 +274,104 @@ private fun HomeTab(
                 }
             }
         }
-        if (byCategory.isNotEmpty()) {
-            item { Text("Spending by category", style = MaterialTheme.typography.titleMedium) }
-            items(byCategory, key = { "c" + it.key }) { (name, amount) ->
-                Column {
-                    Row {
-                        Text("${emojiOf[name] ?: "🏷️"} $name", modifier = Modifier.weight(1f))
-                        Text(formatMoney(amount), fontWeight = FontWeight.SemiBold)
-                    }
-                    LinearProgressIndicator(
-                        progress = { if (spent > 0) (amount / spent).toFloat() else 0f },
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    )
-                }
-            }
+        if (debits.isNotEmpty()) item(key = "spend") {
+            BreakdownSection("💸 Spending by category", spent, DebitRed, categoryGroups(debits, spent, DebitRed))
         }
-        if (byAccount.isNotEmpty()) {
-            item { Text("Paid by bank / card (full amounts)", style = MaterialTheme.typography.titleMedium) }
-            items(byAccount, key = { "a" + it.key }) { (label, v) ->
-                Row {
-                    Text(label, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${v.second} · ${formatMoney(v.first)}", fontWeight = FontWeight.SemiBold)
-                }
-            }
+        if (credits.isNotEmpty()) item(key = "income") {
+            BreakdownSection("💰 Income by category", received, CreditGreen, categoryGroups(credits, received, CreditGreen))
+        }
+        if (accountGroups.isNotEmpty()) item(key = "accounts") {
+            BreakdownSection("🏦 Banks & cards (full amounts)", null, MaterialTheme.colorScheme.primary, accountGroups)
+        }
+        if (transfers.isNotEmpty()) item(key = "transfers") {
+            val t = transfers.sumOf { it.amount }
+            BreakdownSection("🔁 Transfers (not counted)", t, MaterialTheme.colorScheme.outline, listOf(
+                BreakdownGroup("transfers", "Between your own accounts", MaterialTheme.colorScheme.outline, t,
+                    MaterialTheme.colorScheme.onSurface, "${transfers.size} transactions", null,
+                    transfers.sortedByDescending { it.timestamp }, showCategory = true)
+            ))
         }
         if (live.isEmpty()) item {
             Text("No transactions this month yet. New bank SMS will show up here automatically — " +
                 "or import past SMS from the Setup tab.", style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+private fun percent(part: Double, total: Double) = if (total > 0) "${Math.round(part / total * 100)}%" else "–"
+
+private class BreakdownGroup(
+    val key: String, val title: String, val color: Color, val amount: Double, val amountColor: Color,
+    val subtitle: String, val fraction: Float?, val txns: List<Transaction>, val showCategory: Boolean,
+)
+
+/** A coloured card of rows; tapping a row expands its transactions, and each of those opens the transaction. */
+@Composable
+private fun BreakdownSection(title: String, total: Double?, accent: Color, groups: List<BreakdownGroup>) {
+    val context = LocalContext.current
+    var expanded by remember { mutableStateOf(setOf<String>()) }
+    Card(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().background(accent.copy(alpha = 0.14f)).padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            total?.let { Text(formatMoney(it), color = accent, fontWeight = FontWeight.Bold) }
+        }
+        groups.forEachIndexed { index, g ->
+            if (index > 0) HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            val open = g.key in expanded
+            Column(
+                Modifier.fillMaxWidth()
+                    .clickable { expanded = if (open) expanded - g.key else expanded + g.key }
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(width = 6.dp, height = 36.dp).clip(RoundedCornerShape(3.dp)).background(g.color))
+                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                        Text(g.title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(g.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text(formatMoney(g.amount), fontWeight = FontWeight.Bold, color = g.amountColor)
+                    Text(if (open) "  ▾" else "  ▸", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                g.fraction?.let { f ->
+                    LinearProgressIndicator(
+                        progress = { f }, color = g.color, trackColor = g.color.copy(alpha = 0.15f),
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp).height(6.dp).clip(RoundedCornerShape(3.dp)),
+                    )
+                }
+            }
+            if (open) {
+                Column(Modifier.fillMaxWidth().background(g.color.copy(alpha = 0.07f)).padding(vertical = 4.dp)) {
+                    g.txns.forEachIndexed { i, t ->
+                        if (i > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = g.color.copy(alpha = 0.2f))
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable { context.startActivity(CategorizeActivity.intent(context, t.id)) }
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(t.merchant ?: t.effectiveCategory(), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Text(
+                                    formatDay(t.timestamp) + " · " + (if (g.showCategory) t.effectiveCategory() else t.sourceLabel) +
+                                        (t.myShare?.let { " · my share of ${formatMoney(t.amount)}" } ?: ""),
+                                    style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text(
+                                (if (t.type == TxnType.DEBIT) "−" else "+") + formatMoney(t.countedAmount),
+                                color = if (t.type == TxnType.DEBIT) DebitRed else CreditGreen,
+                                style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                            )
+                            Text("  ›", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -338,29 +449,48 @@ private fun CategoriesTab(modifier: Modifier, categories: List<Category>) {
     val context = LocalContext.current
     val db = remember { FinanceDb.get(context) }
     val scope = rememberCoroutineScope()
-    var adding by remember { mutableStateOf(false) }
+    var addingKind by remember { mutableStateOf<String?>(null) }
     var deleting by remember { mutableStateOf<Category?>(null) }
-    LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        item {
-            OutlinedButton(onClick = { adding = true }, modifier = Modifier.fillMaxWidth()) { Text("＋ Add category") }
-        }
-        items(categories, key = { it.name }) { c ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(c.emoji, style = MaterialTheme.typography.titleLarge, modifier = Modifier.width(40.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(c.name)
-                    Text(when (c.kind) { "EXPENSE" -> "Expense"; "INCOME" -> "Income"; else -> "Expense & income" },
-                        style = MaterialTheme.typography.bodySmall)
-                }
-                if (c.name != CategorySuggester.OTHER && c.name != CategorySuggester.INCOME) {
-                    IconButton(onClick = { deleting = c }) { Icon(Icons.Filled.Delete, contentDescription = "Delete ${c.name}") }
+    LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        listOf(KIND_EXPENSE to "💸 Spending categories", KIND_INCOME to "💰 Income categories").forEach { (kind, title) ->
+            val accent = if (kind == KIND_EXPENSE) DebitRed else CreditGreen
+            val list = categories.filter { it.kind == kind }
+            item(key = kind) {
+                Card(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.fillMaxWidth().background(accent.copy(alpha = 0.14f)).padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { addingKind = kind }) { Text("＋ Add") }
+                    }
+                    list.forEachIndexed { i, c ->
+                        if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(width = 6.dp, height = 28.dp).clip(RoundedCornerShape(3.dp))
+                                .background(categoryColor(categories.indexOf(c))))
+                            Text(c.emoji, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 10.dp))
+                            Text(c.name, modifier = Modifier.weight(1f))
+                            // Move a category to the other side (e.g. a custom one filed under the wrong type).
+                            TextButton(onClick = {
+                                scope.launch(Dispatchers.IO) {
+                                    db.setCategoryKind(c.name, if (kind == KIND_EXPENSE) KIND_INCOME else KIND_EXPENSE)
+                                }
+                            }) { Text(if (kind == KIND_EXPENSE) "→ Income" else "→ Spending", style = MaterialTheme.typography.labelSmall) }
+                            if (c.name != CategorySuggester.OTHER && c.name != CategorySuggester.INCOME) {
+                                IconButton(onClick = { deleting = c }) { Icon(Icons.Filled.Delete, contentDescription = "Delete ${c.name}") }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-    if (adding) NewCategoryDialog(onDismiss = { adding = false }) { name, emoji ->
-        adding = false
-        scope.launch(Dispatchers.IO) { db.addCategory(name, emoji) }
+    addingKind?.let { kind ->
+        NewCategoryDialog(onDismiss = { addingKind = null }) { name, emoji ->
+            addingKind = null
+            scope.launch(Dispatchers.IO) { db.addCategory(name, emoji, kind) }
+        }
     }
     deleting?.let { c ->
         AlertDialog(

@@ -53,10 +53,16 @@ data class Transaction(
 data class Category(val name: String, val emoji: String, val kind: String)
 
 /** Categories that move money between your own accounts and are left out of spend/income totals. */
-const val TRANSFER = "Transfer"
+val TRANSFER_CATEGORIES = setOf(CategorySuggester.TRANSFER, CategorySuggester.TRANSFER_IN)
+
+const val KIND_EXPENSE = "EXPENSE"
+const val KIND_INCOME = "INCOME"
+
+/** Category kind that fits a transaction type: spending categories for debits, income ones for credits. */
+fun kindFor(type: TxnType) = if (type == TxnType.DEBIT) KIND_EXPENSE else KIND_INCOME
 
 class FinanceDb private constructor(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "fintrack.db", null, 2) {
+    SQLiteOpenHelper(context.applicationContext, "fintrack.db", null, 3) {
 
     companion object {
         @Volatile private var instance: FinanceDb? = null
@@ -78,12 +84,14 @@ class FinanceDb private constructor(context: Context) :
             Category("Education", "📚", "EXPENSE"),
             Category("Travel", "✈️", "EXPENSE"),
             Category("Cash", "💵", "EXPENSE"),
-            Category("Investment", "📈", "BOTH"),
-            Category(TRANSFER, "🔁", "BOTH"),
+            Category("Investment", "📈", "EXPENSE"),
+            Category(CategorySuggester.TRANSFER, "🔁", "EXPENSE"),
+            Category(CategorySuggester.OTHER, "📦", "EXPENSE"),
             Category("Salary", "💼", "INCOME"),
             Category("Refund", "↩️", "INCOME"),
+            Category(CategorySuggester.INTEREST, "🏧", "INCOME"),
+            Category(CategorySuggester.TRANSFER_IN, "🔄", "INCOME"),
             Category(CategorySuggester.INCOME, "💰", "INCOME"),
-            Category(CategorySuggester.OTHER, "📦", "BOTH"),
         )
     }
 
@@ -121,6 +129,28 @@ class FinanceDb private constructor(context: Context) :
             addV2Columns(db)
             // Learned rules become per-SIM; old ones apply to SIM 1.
             db.execSQL("UPDATE merchant_rules SET merchant_key = '1|' || merchant_key")
+        }
+        if (oldVersion < 3) splitCategoriesByKind(db)
+    }
+
+    /** v3: every category is either spending or income; the old shared ones get an income twin. */
+    private fun splitCategoriesByKind(db: SQLiteDatabase) {
+        db.execSQL("UPDATE categories SET kind = 'EXPENSE' WHERE kind NOT IN ('EXPENSE', 'INCOME')")
+        val sort = db.rawQuery("SELECT COALESCE(MAX(sort), 0) FROM categories", null).use { it.moveToFirst(); it.getInt(0) }
+        listOf(Category(CategorySuggester.INTEREST, "🏧", "INCOME"), Category(CategorySuggester.TRANSFER_IN, "🔄", "INCOME"))
+            .forEachIndexed { i, c ->
+                db.insertWithOnConflict("categories", null, ContentValues().apply {
+                    put("name", c.name); put("emoji", c.emoji); put("kind", c.kind); put("sort", sort + 1 + i)
+                }, SQLiteDatabase.CONFLICT_IGNORE)
+            }
+        // Move existing credits onto the income side.
+        for ((from, to) in listOf(
+            CategorySuggester.TRANSFER to CategorySuggester.TRANSFER_IN,
+            "Investment" to CategorySuggester.INTEREST,
+            CategorySuggester.OTHER to CategorySuggester.INCOME,
+        )) {
+            db.execSQL("UPDATE transactions SET category = ? WHERE category = ? AND type = 'CREDIT'", arrayOf(to, from))
+            db.execSQL("UPDATE transactions SET suggested_category = ? WHERE suggested_category = ? AND type = 'CREDIT'", arrayOf(to, from))
         }
     }
 
@@ -259,12 +289,17 @@ class FinanceDb private constructor(context: Context) :
             buildList { while (it.moveToNext()) add(Category(it.getString(0), it.getString(1), it.getString(2))) }
         }
 
-    fun addCategory(name: String, emoji: String, kind: String = "BOTH") {
+    fun addCategory(name: String, emoji: String, kind: String) {
         val sort = readableDatabase.rawQuery("SELECT COALESCE(MAX(sort), 0) + 1 FROM categories", null)
             .use { it.moveToFirst(); it.getInt(0) }
         writableDatabase.insertWithOnConflict("categories", null, ContentValues().apply {
             put("name", name.trim()); put("emoji", emoji.ifBlank { "🏷️" }); put("kind", kind); put("sort", sort)
         }, SQLiteDatabase.CONFLICT_IGNORE)
+        changed()
+    }
+
+    fun setCategoryKind(name: String, kind: String) {
+        writableDatabase.update("categories", ContentValues().apply { put("kind", kind) }, "name = ?", arrayOf(name))
         changed()
     }
 

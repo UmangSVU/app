@@ -23,6 +23,15 @@ fun formatDay(millis: Long): String = SimpleDateFormat("EEE, d MMM", Locale.getD
 fun formatMonth(millis: Long): String = SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date(millis))
 
 val DebitRed = Color(0xFFD32F2F)
+
+/** Distinct colours so each category / account is easy to tell apart. */
+private val PALETTE = listOf(
+    0xFFE53935, 0xFF1E88E5, 0xFF43A047, 0xFFFB8C00, 0xFF8E24AA, 0xFF00ACC1,
+    0xFFF4511E, 0xFF3949AB, 0xFF7CB342, 0xFFD81B60, 0xFF6D4C41, 0xFF00897B,
+    0xFFFDD835, 0xFF5E35B1, 0xFF546E7A, 0xFFC0CA33,
+).map { Color(it) }
+
+fun categoryColor(index: Int): Color = PALETTE[Math.floorMod(index, PALETTE.size)]
 val CreditGreen = Color(0xFF2E7D32)
 
 @Composable

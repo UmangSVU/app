@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.umang.fintrack.data.Category
 import com.umang.fintrack.data.FinanceDb
+import com.umang.fintrack.data.kindFor
 import com.umang.fintrack.data.SimBooks
 import com.umang.fintrack.data.Transaction
 import com.umang.fintrack.notify.Notifier
@@ -242,10 +243,22 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
 
                 HorizontalDivider()
                 Text("Category", style = MaterialTheme.typography.titleSmall)
-                val wanted = if (type == TxnType.DEBIT) "EXPENSE" else "INCOME"
-                val ordered = categories.sortedBy { if (it.kind == wanted || it.kind == "BOTH") 0 else 1 }
+                // Spending categories for debits, income categories for credits.
+                val shown = categories.filter { it.kind == kindFor(type) }
+                LaunchedEffect(type, shown) {
+                    if (shown.isNotEmpty() && shown.none { it.name == selected }) {
+                        val fallback = txn?.suggestedCategory?.takeIf { s -> shown.any { it.name == s } }
+                            ?: if (type == TxnType.DEBIT) CategorySuggester.OTHER else CategorySuggester.INCOME
+                        selected = shown.firstOrNull { it.name == fallback }?.name ?: shown.first().name
+                    }
+                }
+                Text(
+                    if (type == TxnType.DEBIT) "Spending categories" else "Income categories",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (type == TxnType.DEBIT) DebitRed else CreditGreen,
+                )
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ordered.forEach { c ->
+                    shown.forEach { c ->
                         FilterChip(
                             selected = selected == c.name,
                             onClick = { selected = c.name },
@@ -372,7 +385,7 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
             onCreate = { name, emoji ->
                 addingCategory = false
                 scope.launch {
-                    withContext(Dispatchers.IO) { db.addCategory(name, emoji, if (type == TxnType.DEBIT) "EXPENSE" else "INCOME") }
+                    withContext(Dispatchers.IO) { db.addCategory(name, emoji, kindFor(type)) }
                     selected = name.trim()
                     categoriesVersion++
                 }

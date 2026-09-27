@@ -5,6 +5,9 @@ object CategorySuggester {
 
     const val OTHER = "Other"
     const val INCOME = "Income"
+    const val TRANSFER = "Transfer"
+    const val TRANSFER_IN = "Transfer In"
+    const val INTEREST = "Interest & Dividends"
 
     private class Rule(val category: String, keywords: List<String>) {
         val regex = Regex(
@@ -84,8 +87,8 @@ object CategorySuggester {
             return when {
                 "salary" in lower || "sal cr" in lower || "payroll" in lower -> "Salary"
                 Regex("""\brefund|revers|cashback\b""").containsMatchIn(lower) -> "Refund"
-                "credit card" in lower && Regex("""payment|received""").containsMatchIn(lower) -> "Transfer"
-                "interest" in lower || "dividend" in lower -> "Investment"
+                "credit card" in lower && Regex("""payment|received""").containsMatchIn(lower) -> TRANSFER_IN
+                "interest" in lower || "dividend" in lower -> INTEREST
                 else -> INCOME
             }
         }
@@ -97,7 +100,7 @@ object CategorySuggester {
         DEBIT_RULES.firstOrNull { it.regex.containsMatchIn(haystack) }?.let { return it.category }
         if (parsed.mode == "Auto-debit") return "EMI & Loans"
         if ("credit card" in lower && Regex("""payment (?:of|towards)|bill payment""").containsMatchIn(lower)) {
-            return "Transfer"
+            return TRANSFER
         }
         return OTHER
     }

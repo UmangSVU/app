@@ -28,8 +28,12 @@ debit and credit under a category.
   History → Not counted.
 - **Group bills**: turn on *Group bill / split* in the pop-up and enter your share (or tap ½, ⅓,
   ¼, ⅕). Only your share counts as spending; the rest is shown as "paid for others".
-- **Home**: spent and received for each month, spending by category, and spending by
-  bank/card. Transfers are left out of the totals.
+- **Home**: spending and income for each month, each with its own colour-coded
+  category breakdown, plus a Banks & cards section. Tap any row to see its transactions,
+  and tap a transaction to open it. Transfers between your own accounts are shown on their
+  own and left out of the totals.
+- **Categories are split into Spending and Income.** The pop-up only offers the ones that
+  match a debit or a credit.
 - **History, custom categories, cash entries** (the ＋ button), and an import of the **last
   90 days of SMS**.
 

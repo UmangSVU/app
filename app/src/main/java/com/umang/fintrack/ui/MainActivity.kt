@@ -87,6 +87,7 @@ import com.umang.fintrack.notify.Notifier
 import com.umang.fintrack.parser.CategorySuggester
 import com.umang.fintrack.parser.TxnType
 import com.umang.fintrack.sms.InboxImporter
+import com.umang.fintrack.sms.SmsSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -98,6 +99,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Notifier.ensureChannel(this)
+        SmsSync.schedule(this)
         setContent { FinTheme { MainScreen(resumeTick) } }
     }
 
@@ -106,7 +108,11 @@ class MainActivity : ComponentActivity() {
         resumeTick++
         // Re-post prompts for anything still uncategorised (e.g. after the app was force-stopped).
         val app = applicationContext
-        Thread { Notifier.showAllPending(app) }.start()
+        Thread {
+            Notifier.showAllPending(app)
+            // Pick up any SMS the live receiver missed while the app was asleep.
+            SmsSync.catchUp(app, openPopup = false)
+        }.start()
     }
 }
 
@@ -135,6 +141,8 @@ private fun MainScreen(resumeTick: Int) {
     var pending by remember { mutableStateOf<List<Long>>(emptyList()) }
     var sim by remember { mutableIntStateOf(SimBooks.selected(context)) }
     var namesVersion by remember { mutableIntStateOf(0) }
+    var refreshing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(changes, monthOffset, resumeTick, sim) {
         val (t, c, p) = withContext(Dispatchers.IO) {
@@ -146,7 +154,25 @@ private fun MainScreen(resumeTick: Int) {
     Scaffold(
         topBar = {
             Column {
-                TopAppBar(title = { Text("FinTrack") })
+                TopAppBar(
+                    title = { Text("FinTrack") },
+                    actions = {
+                        TextButton(enabled = !refreshing, onClick = {
+                            refreshing = true
+                            scope.launch {
+                                val ids = withContext(Dispatchers.IO) { SmsSync.refresh(context) }
+                                refreshing = false
+                                if (ids.isEmpty()) {
+                                    Toast.makeText(context, "Up to date – no missed transactions in the last 7 days",
+                                        Toast.LENGTH_LONG).show()
+                                } else {
+                                    Toast.makeText(context, "Found ${ids.size} missed transaction(s)", Toast.LENGTH_LONG).show()
+                                    context.startActivity(CategorizeActivity.intent(context, ids.first()))
+                                }
+                            }
+                        }) { Text(if (refreshing) "Checking…" else "⟳ Refresh") }
+                    },
+                )
                 if (tab != Tab.Categories) {
                     // Each SIM is a separate book of accounts.
                     Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

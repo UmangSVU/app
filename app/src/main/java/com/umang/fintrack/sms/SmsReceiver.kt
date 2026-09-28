@@ -39,10 +39,14 @@ object InboxImporter {
      * Reads past bank SMS from the inbox. Old messages are saved with their suggested category
      * (no popups) so the history is filled in; you can re-categorise any of them later.
      */
-    fun import(context: Context, days: Int = 90): Int {
-        val since = System.currentTimeMillis() - days * 24L * 60 * 60 * 1000
+    fun import(context: Context, days: Int = 90): Int =
+        scanInbox(context, System.currentTimeMillis() - days * DAY, pending = false).size
+
+    /** Adds every transaction SMS in the inbox since [since] that isn't stored yet; returns the new ids. */
+    fun scanInbox(context: Context, since: Long, pending: Boolean): List<Long> {
+        if (!SmsSync.canReadSms(context)) return emptyList()
         val db = FinanceDb.get(context)
-        var added = 0
+        val added = mutableListOf<Long>()
         context.contentResolver.query(
             Telephony.Sms.Inbox.CONTENT_URI,
             arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.SUBSCRIPTION_ID),
@@ -52,9 +56,11 @@ object InboxImporter {
             while (c.moveToNext()) {
                 val body = c.getString(1) ?: continue
                 val sim = (if (c.isNull(3)) null else SimBooks.slotOfSubscription(c.getInt(3))) ?: 1
-                if (db.insertFromSms(c.getString(0), body, c.getLong(2), sim, pending = false) != null) added++
+                db.insertFromSms(c.getString(0), body, c.getLong(2), sim, pending)?.let(added::add)
             }
         }
         return added
     }
+
+    const val DAY = 24L * 60 * 60 * 1000
 }

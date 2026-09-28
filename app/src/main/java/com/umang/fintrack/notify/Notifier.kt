@@ -18,6 +18,7 @@ import com.umang.fintrack.data.FinanceDb
 import com.umang.fintrack.data.SimBooks
 import com.umang.fintrack.data.Transaction
 import com.umang.fintrack.parser.TxnType
+import com.umang.fintrack.sms.SmsSync
 import com.umang.fintrack.ui.CategorizeActivity
 import com.umang.fintrack.ui.formatMoney
 
@@ -152,7 +153,11 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
         val pending = goAsync()
         Thread {
-            try { Notifier.showAllPending(context) } finally { pending.finish() }
+            try {
+                SmsSync.schedule(context)
+                Notifier.showAllPending(context)
+                SmsSync.catchUp(context, openPopup = false)
+            } finally { pending.finish() }
         }.start()
     }
 }

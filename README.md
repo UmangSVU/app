@@ -17,6 +17,10 @@ debit and credit under a category.
 - **Won't go away until you pick a category**: Back doesn't close the pop-up, and the
   notification is ongoing. If you swipe it away, it comes back. The notification also has a
   one-tap "✓ \<suggested category\>" button.
+- **Doesn't miss SMS**: no internet needed. Besides reacting to each incoming SMS, the app
+  checks the SMS inbox for anything it missed when you open it, every 15 minutes, after a
+  reboot, and when the phone comes back online. **⟳ Refresh** (top right) checks the last 7
+  days on demand.
 - **Learns**: once you file a merchant under a category, it suggests that category for that
   merchant from then on.
 - **Two SIMs, two separate books**: each SMS is filed under the SIM it arrived on. You can

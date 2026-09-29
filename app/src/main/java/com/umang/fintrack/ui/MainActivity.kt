@@ -95,6 +95,10 @@ import kotlinx.coroutines.withContext
 import java.util.Calendar
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        const val EXTRA_OPEN_SETUP = "open_setup"
+    }
+
     private var resumeTick by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -102,7 +106,8 @@ class MainActivity : ComponentActivity() {
         Notifier.ensureChannel(this)
         SmsSync.schedule(this)
         Backup.schedule(this)
-        setContent { FinTheme { MainScreen(resumeTick) } }
+        val openSetup = intent.getBooleanExtra(EXTRA_OPEN_SETUP, false)
+        setContent { FinTheme { MainScreen(resumeTick, openSetup) } }
     }
 
     override fun onResume() {
@@ -132,11 +137,11 @@ private fun monthStart(offset: Int): Long = Calendar.getInstance().apply {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MainScreen(resumeTick: Int) {
+private fun MainScreen(resumeTick: Int, openSetup: Boolean) {
     val context = LocalContext.current
     val db = remember { FinanceDb.get(context) }
     val changes by db.changes.collectAsState()
-    var tab by remember { mutableStateOf(if (hasSmsPermission(context)) Tab.Home else Tab.Setup) }
+    var tab by remember { mutableStateOf(if (hasSmsPermission(context) && !openSetup) Tab.Home else Tab.Setup) }
     var monthOffset by remember { mutableIntStateOf(0) }
     var txns by remember { mutableStateOf<List<Transaction>>(emptyList()) }
     var categories by remember { mutableStateOf<List<Category>>(emptyList()) }
@@ -652,9 +657,39 @@ private fun SimNamesCard(onNamesChanged: () -> Unit) {
 private fun BackupCard() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var email by remember { mutableStateOf(Backup.email(context)) }
-    var last by remember { mutableStateOf(Backup.lastBackup(context)) }
+    var version by remember { mutableIntStateOf(0) }
+    val driveName = remember(version) { Backup.driveFileName(context) }
+    val last = remember(version) { Backup.lastBackup(context) }
+    val lastDrive = remember(version) { Backup.lastDriveBackup(context) }
     var busy by remember { mutableStateOf(false) }
+
+    fun backUp(share: Boolean = false) {
+        busy = true
+        scope.launch {
+            val (file, drive) = withContext(Dispatchers.IO) { Backup.backupNow(context) }
+            busy = false
+            version++
+            if (share) context.startActivity(Backup.shareIntent(context, file))
+            else Toast.makeText(
+                context,
+                when {
+                    drive -> "Backed up to Google Drive"
+                    Backup.driveUri(context) != null -> "Saved on the phone, but Drive couldn't be updated. Try linking the file again."
+                    else -> "Saved on the phone (Downloads/FinTrack)"
+                },
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    // Pick where the backup lives in Drive (choose "Drive" in the picker's menu). Asked once.
+    val linker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching { Backup.linkDrive(context, uri) }
+            .onSuccess { backUp() }
+            .onFailure { Toast.makeText(context, "Couldn't link that file: ${it.message}", Toast.LENGTH_LONG).show() }
+        version++
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         busy = true
@@ -668,40 +703,49 @@ private fun BackupCard() {
             ).show()
         }
     }
+
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Backup & restore", style = MaterialTheme.typography.titleMedium)
+            Text("Backup to Google Drive", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Every day at about 9 PM a backup is saved on the phone (also in Downloads/FinTrack) and a " +
-                    "notification lets you email it with one tap. Your email app sends it; FinTrack never " +
-                    "uses the internet.", style = MaterialTheme.typography.bodySmall,
+                "Every day at about 9 PM FinTrack replaces one backup file in your Google Drive, with no " +
+                    "taps. The Drive app does the upload; FinTrack itself never uses the internet. A copy is also " +
+                    "kept in Downloads/FinTrack.", style = MaterialTheme.typography.bodySmall,
             )
-            OutlinedTextField(
-                value = email, onValueChange = { email = it }, label = { Text("Email backups to") },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
-            )
-            Text(
-                if (last == 0L) "No backup yet" else "Last backup: ${formatDateTime(last)}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Button(enabled = !busy && email.contains('@'), modifier = Modifier.fillMaxWidth(), onClick = {
-                Backup.setEmail(context, email)
-                busy = true
-                scope.launch {
-                    val file = withContext(Dispatchers.IO) { Backup.create(context) }
-                    busy = false
-                    last = Backup.lastBackup(context)
-                    context.startActivity(Backup.emailIntent(context, file))
+            if (driveName == null) {
+                Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = { linker.launch(Backup.FILE_NAME) }) {
+                    Text("Link Google Drive")
                 }
-            }) { Text("Save & email backup now") }
+                Text(
+                    "In the screen that opens: tap ☰ (top left) → Drive → pick a folder → Save.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                Text("✓ Linked: $driveName", color = CreditGreen, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (lastDrive == 0L) "Not uploaded yet" else "Last Drive backup: ${formatDateTime(lastDrive)}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = { backUp() }) {
+                    Text(if (busy) "Backing up…" else "Back up now")
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { linker.launch(Backup.FILE_NAME) }) { Text("Change file") }
+                    TextButton(onClick = { Backup.unlinkDrive(context); version++ }) { Text("Unlink") }
+                }
+            }
+            if (last != 0L) Text("Last phone backup: ${formatDateTime(last)}", style = MaterialTheme.typography.bodySmall)
+            TextButton(enabled = !busy, onClick = { backUp(share = true) }) { Text("Share backup file…") }
+
+            HorizontalDivider()
+            Text("Restore", style = MaterialTheme.typography.titleSmall)
             OutlinedButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
                 picker.launch(arrayOf("application/json", "application/octet-stream", "text/plain", "*/*"))
             }) { Text("Restore from backup file") }
             Text(
-                "New phone: install FinTrack, allow permissions, download the backup attachment from your email, " +
-                    "then tap Restore and pick it. Restoring only adds what's missing; nothing is deleted.",
+                "New phone: install FinTrack, allow permissions, tap Restore and pick ${Backup.FILE_NAME} from " +
+                    "Drive (☰ → Drive). Restoring only adds what's missing; nothing is deleted. Then link Drive " +
+                    "again to keep backing up to the same file.",
                 style = MaterialTheme.typography.bodySmall,
             )
         }

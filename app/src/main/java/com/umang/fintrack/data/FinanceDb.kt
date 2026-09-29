@@ -10,6 +10,8 @@ import com.umang.fintrack.parser.SmsParser
 import com.umang.fintrack.parser.TxnType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import org.json.JSONArray
+import org.json.JSONObject
 import java.security.MessageDigest
 
 data class Transaction(
@@ -307,6 +309,91 @@ class FinanceDb private constructor(context: Context) :
         writableDatabase.delete("categories", "name = ?", arrayOf(name))
         writableDatabase.delete("merchant_rules", "category = ?", arrayOf(name))
         changed()
+    }
+
+    // ---------- Backup / restore ----------
+
+    private val BACKUP_TABLES = listOf("categories", "merchant_rules", "transactions")
+
+    /** Every row of every table, column by column, so a backup survives future schema changes. */
+    fun exportTables(): JSONObject {
+        val out = JSONObject()
+        for (table in BACKUP_TABLES) {
+            val rows = JSONArray()
+            readableDatabase.rawQuery("SELECT * FROM $table", null).use { c ->
+                while (c.moveToNext()) {
+                    val row = JSONObject()
+                    for (i in 0 until c.columnCount) {
+                        row.put(c.getColumnName(i), when (c.getType(i)) {
+                            Cursor.FIELD_TYPE_INTEGER -> c.getLong(i)
+                            Cursor.FIELD_TYPE_FLOAT -> c.getDouble(i)
+                            Cursor.FIELD_TYPE_STRING -> c.getString(i)
+                            else -> JSONObject.NULL
+                        })
+                    }
+                    rows.put(row)
+                }
+            }
+            out.put(table, rows)
+        }
+        return out
+    }
+
+    /**
+     * Merges a backup into this phone's data: nothing here is deleted or overwritten, and
+     * transactions that already exist are skipped. Returns how many transactions were added.
+     */
+    fun importTables(data: JSONObject): Int {
+        val db = writableDatabase
+        var added = 0
+        db.beginTransaction()
+        try {
+            for (table in BACKUP_TABLES) {
+                val rows = data.optJSONArray(table) ?: continue
+                val columns = db.rawQuery("PRAGMA table_info($table)", null).use { c ->
+                    buildSet { while (c.moveToNext()) add(c.getString(c.getColumnIndexOrThrow("name"))) }
+                }
+                for (i in 0 until rows.length()) {
+                    val row = rows.getJSONObject(i)
+                    val values = ContentValues()
+                    for (key in row.keys()) {
+                        if (key !in columns || (table == "transactions" && key == "id")) continue
+                        when (val v = row.get(key)) {
+                            JSONObject.NULL -> values.putNull(key)
+                            is Int -> values.put(key, v.toLong())
+                            is Long -> values.put(key, v)
+                            is Double -> values.put(key, v)
+                            is Boolean -> values.put(key, if (v) 1 else 0)
+                            else -> values.put(key, v.toString())
+                        }
+                    }
+                    when (table) {
+                        "transactions" -> {
+                            if (transactionExists(values)) continue
+                            if (db.insertWithOnConflict(table, null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L) added++
+                        }
+                        "merchant_rules" -> db.insertWithOnConflict(table, null, values, SQLiteDatabase.CONFLICT_REPLACE)
+                        else -> db.insertWithOnConflict(table, null, values, SQLiteDatabase.CONFLICT_IGNORE)
+                    }
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        changed()
+        return added
+    }
+
+    private fun transactionExists(v: ContentValues): Boolean {
+        val body = v.getAsString("body")
+        val time = v.getAsLong("timestamp") ?: return true
+        val (where, args) = if (body != null) {
+            "body = ? AND ABS(timestamp - ?) < 600000" to arrayOf(body, time.toString())
+        } else {
+            "body IS NULL AND timestamp = ? AND amount = ?" to arrayOf(time.toString(), (v.getAsDouble("amount") ?: 0.0).toString())
+        }
+        return readableDatabase.rawQuery("SELECT 1 FROM transactions WHERE $where LIMIT 1", args).use { it.moveToFirst() }
     }
 
     private fun Cursor.str(col: String): String? = getColumnIndexOrThrow(col).let { if (isNull(it)) null else getString(it) }

@@ -77,6 +77,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.umang.fintrack.data.Category
+import com.umang.fintrack.data.Backup
 import com.umang.fintrack.data.FinanceDb
 import com.umang.fintrack.data.SimBooks
 import com.umang.fintrack.data.TRANSFER_CATEGORIES
@@ -100,6 +101,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Notifier.ensureChannel(this)
         SmsSync.schedule(this)
+        Backup.schedule(this)
         setContent { FinTheme { MainScreen(resumeTick) } }
     }
 
@@ -586,6 +588,7 @@ private fun SetupTab(modifier: Modifier, resumeTick: Int, onNamesChanged: () -> 
                 "\"Allow restricted settings\", then come back and tap Allow again.", style = MaterialTheme.typography.bodySmall)
         }
         item { SimNamesCard(onNamesChanged) }
+        item { BackupCard() }
         item {
             Card {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -641,6 +644,66 @@ private fun SimNamesCard(onNamesChanged: () -> Unit) {
                 onNamesChanged()
                 Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
             }) { Text("Save names") }
+        }
+    }
+}
+
+@Composable
+private fun BackupCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var email by remember { mutableStateOf(Backup.email(context)) }
+    var last by remember { mutableStateOf(Backup.lastBackup(context)) }
+    var busy by remember { mutableStateOf(false) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { Backup.restore(context, uri) } }
+            busy = false
+            Toast.makeText(
+                context,
+                result.fold({ "Restored $it transaction(s). Existing entries were kept." }, { "Restore failed: ${it.message}" }),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Backup & restore", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Every day at about 9 PM a backup is saved on the phone (also in Downloads/FinTrack) and a " +
+                    "notification lets you email it with one tap. Your email app sends it; FinTrack never " +
+                    "uses the internet.", style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedTextField(
+                value = email, onValueChange = { email = it }, label = { Text("Email backups to") },
+                singleLine = true, modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
+            )
+            Text(
+                if (last == 0L) "No backup yet" else "Last backup: ${formatDateTime(last)}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(enabled = !busy && email.contains('@'), modifier = Modifier.fillMaxWidth(), onClick = {
+                Backup.setEmail(context, email)
+                busy = true
+                scope.launch {
+                    val file = withContext(Dispatchers.IO) { Backup.create(context) }
+                    busy = false
+                    last = Backup.lastBackup(context)
+                    context.startActivity(Backup.emailIntent(context, file))
+                }
+            }) { Text("Save & email backup now") }
+            OutlinedButton(enabled = !busy, modifier = Modifier.fillMaxWidth(), onClick = {
+                picker.launch(arrayOf("application/json", "application/octet-stream", "text/plain", "*/*"))
+            }) { Text("Restore from backup file") }
+            Text(
+                "New phone: install FinTrack, allow permissions, download the backup attachment from your email, " +
+                    "then tap Restore and pick it. Restoring only adds what's missing; nothing is deleted.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }

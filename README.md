@@ -38,10 +38,13 @@ debit and credit under a category.
   own and left out of the totals.
 - **Categories are split into Spending and Income.** The pop-up only offers the ones that
   match a debit or a credit.
+- **Daily backup**: at about 9 PM the app saves a backup (also copied to Downloads/FinTrack)
+  and a notification opens your email app with it attached, addressed to the email you set in
+  Setup. On a new phone, **Setup → Restore from backup file** merges it back in.
 - **History, custom categories, cash entries** (the ＋ button), and an import of the **last
   90 days of SMS**.
 
-Everything stays on the phone in a local SQLite database. There's no internet permission.
+Everything stays on the phone in a local SQLite database. There's no internet permission; backups are sent by your own email app.
 
 ## Install on your phone
 

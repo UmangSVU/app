@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #667085; --line: #d9dde3;
+    --accent: #1f5eff; --accent-text: #fff; --ok: #0f7b3f; --warn: #b54708; --err: #c0262d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b1f27; --text: #e8eaee; --muted: #9aa3b2; --line: #2e3440;
+      --accent: #5b8cff; --accent-text: #0b0e14; --ok: #4cc38a; --warn: #f5a524; --err: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 4px 0 2px; }
+  .sub { color: var(--muted); margin-bottom: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input, textarea, select { width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--text); font: inherit; }
+  textarea { min-height: 84px; resize: vertical; }
+  input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; min-width: 0; }
+  button { font: inherit; border-radius: 8px; padding: 10px 14px; border: 1px solid var(--line);
+    background: var(--card); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; width: 100%; padding: 13px; font-size: 16px; }
+  button:disabled { opacity: .55; cursor: default; }
+  .upload { display: flex; gap: 8px; flex-wrap: wrap; }
+  .upload label.btn { display: inline-flex; align-items: center; margin: 0; padding: 10px 14px; border: 1px dashed var(--accent);
+    border-radius: 8px; color: var(--accent); cursor: pointer; font-size: 14px; }
+  .upload input { display: none; }
+  .hint { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); margin-top: 6px; }
+  .badge.intra { color: var(--ok); border-color: var(--ok); }
+  .badge.inter { color: var(--warn); border-color: var(--warn); }
+  .item { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+  .item .top { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: var(--muted); }
+  .item .rm { border: none; background: none; color: var(--err); padding: 2px 4px; }
+  .amt { text-align: right; font-variant-numeric: tabular-nums; padding-top: 34px; }
+  table.tot { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  table.tot td { padding: 5px 0; }
+  table.tot td:last-child { text-align: right; }
+  table.tot tr.grand td { border-top: 1px solid var(--line); font-weight: 700; font-size: 17px; padding-top: 9px; }
+  .msg { padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; display: none; }
+  .msg.err { display: block; background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
+  .msg.info { display: block; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); }
+  .done { text-align: center; }
+  .done .big { font-size: 22px; font-weight: 700; margin: 6px 0; }
+  .links { display: grid; gap: 8px; margin-top: 14px; }
+  .links a, .links button { display: block; text-align: center; text-decoration: none; padding: 12px; border-radius: 8px;
+    border: 1px solid var(--line); color: var(--text); background: var(--card); }
+  .links a.main { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  .hidden { display: none; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  pre { white-space: pre-wrap; font-size: 12px; color: var(--muted); max-height: 200px; overflow: auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>New GST Invoice</h1>
+  <div class="sub" id="meta">Loading…</div>
+  <div id="msg" class="msg"></div>
+
+  <div id="form">
+    <div class="card">
+      <h2>Client</h2>
+      <div class="upload">
+        <label class="btn" for="fileCam">📷 Take photo</label>
+        <input type="file" id="fileCam" accept="image/*" capture="environment">
+        <label class="btn" for="fileAny">📄 Upload image / GST PDF</label>
+        <input type="file" id="fileAny" accept="image/*,application/pdf">
+      </div>
+      <div class="hint" id="readerHint"></div>
+      <details id="ocrBox" class="hidden"><summary>Text read from the document</summary><pre id="ocrText"></pre></details>
+
+      <label for="prev">Or pick a previous client</label>
+      <select id="prev"><option value="">— New client —</option></select>
+
+      <label for="name">Client name *</label>
+      <input id="name" autocomplete="off">
+      <label for="address">Address</label>
+      <textarea id="address"></textarea>
+      <label for="gstin">GST number</label>
+      <input id="gstin" autocomplete="off" maxlength="15" style="text-transform:uppercase">
+      <div id="stateBadge"></div>
+
+      <label for="taxType">Tax</label>
+      <select id="taxType">
+        <option value="auto">Automatic (from GST number)</option>
+        <option value="intra">SGST 9% + CGST 9% (Maharashtra)</option>
+        <option value="inter">IGST 18% (other state)</option>
+      </select>
+    </div>
+
+    <div class="card">
+      <h2>Items</h2>
+      <div id="items"></div>
+      <button id="addItem" type="button">+ Add item</button>
+      <label for="hsn">HSN / SAC code</label>
+      <input id="hsn">
+    </div>
+
+    <div class="card">
+      <table class="tot">
+        <tr><td>Basic amount</td><td id="tBasic">0.00</td></tr>
+        <tr id="rSgst"><td>SGST 9%</td><td id="tSgst">0.00</td></tr>
+        <tr id="rCgst"><td>CGST 9%</td><td id="tCgst">0.00</td></tr>
+        <tr id="rIgst"><td>IGST 18%</td><td id="tIgst">0.00</td></tr>
+        <tr class="grand"><td>Final amount</td><td id="tTotal">₹0.00</td></tr>
+      </table>
+    </div>
+
+    <button class="primary" id="create" disabled>Create invoice</button>
+  </div>
+
+  <div id="result" class="card done hidden"></div>
+</main>
+
+<script>
+var INFO = null;
+var rupee = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+var $ = function (id) { return document.getElementById(id); };
+
+function showMsg(text, kind) {
+  var m = $('msg');
+  m.textContent = text || '';
+  m.className = 'msg' + (text ? ' ' + (kind || 'err') : '');
+}
+
+function call(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function (resolve, reject) {
+    var r = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (e) {
+      reject(e && e.message ? e : new Error(String(e)));
+    });
+    r[fn].apply(r, args);
+  });
+}
+
+function init() {
+  call('getAppInfo').then(function (info) {
+    INFO = info;
+    $('meta').textContent = 'Invoice ' + info.nextInvoiceNo + ' · ' + info.today;
+    $('hsn').value = info.hsn;
+    $('readerHint').textContent = info.aiReader
+      ? 'Reads name, address and GST number with Claude (GST certificate, visiting card, letterhead, photo).'
+      : 'Reads the GST certificate with Google OCR. Check the fields after reading.';
+    info.clients.forEach(function (c, i) {
+      var o = document.createElement('option');
+      o.value = i;
+      o.textContent = c.name + (c.gstin ? ' · ' + c.gstin : '');
+      $('prev').appendChild(o);
+    });
+    addItem();
+    $('create').disabled = false;
+    recalc();
+  }).catch(function (e) {
+    $('meta').textContent = '';
+    showMsg('Could not load: ' + e.message);
+  });
+}
+
+function addItem(desc, qty, rate) {
+  var n = $('items').children.length;
+  if (INFO && n >= INFO.maxItems) { showMsg('An invoice holds up to ' + INFO.maxItems + ' items.'); return; }
+  var d = document.createElement('div');
+  d.className = 'item';
+  d.innerHTML =
+    '<div class="top"><span>Item ' + (n + 1) + '</span><button type="button" class="rm" title="Remove">✕ Remove</button></div>' +
+    '<label>Description</label><input class="desc">' +
+    '<div class="row">' +
+      '<div><label>Qty</label><input class="qty" type="number" inputmode="decimal" min="0" step="any" value="1"></div>' +
+      '<div><label>Rate (₹)</label><input class="rate" type="number" inputmode="decimal" min="0" step="any"></div>' +
+      '<div class="amt">₹0.00</div>' +
+    '</div>';
+  d.querySelector('.desc').value = desc || '';
+  if (qty != null) d.querySelector('.qty').value = qty;
+  if (rate != null) d.querySelector('.rate').value = rate;
+  d.querySelector('.rm').onclick = function () {
+    if ($('items').children.length > 1) d.remove();
+    renumber(); recalc();
+  };
+  d.addEventListener('input', recalc);
+  $('items').appendChild(d);
+  renumber();
+}
+
+function renumber() {
+  Array.prototype.forEach.call($('items').children, function (el, i) {
+    el.querySelector('.top span').textContent = 'Item ' + (i + 1);
+  });
+}
+
+function items() {
+  return Array.prototype.map.call($('items').children, function (el) {
+    return {
+      desc: el.querySelector('.desc').value.trim(),
+      qty: parseFloat(el.querySelector('.qty').value) || 0,
+      rate: parseFloat(el.querySelector('.rate').value) || 0,
+      el: el
+    };
+  });
+}
+
+function isIntra() {
+  var t = $('taxType').value;
+  if (t === 'intra') return true;
+  if (t === 'inter') return false;
+  var g = $('gstin').value.trim().toUpperCase();
+  return !g || g.slice(0, 2) === (INFO ? INFO.homeStateCode : '27');
+}
+
+function recalc() {
+  var basic = 0;
+  items().forEach(function (it) {
+    var a = it.qty * it.rate;
+    basic += a;
+    it.el.querySelector('.amt').textContent = '₹' + rupee.format(a);
+  });
+  var rate = INFO ? INFO.gstRate : 0.18;
+  var intra = isIntra();
+  var half = Math.round(basic * rate / 2 * 100) / 100;
+  var igst = Math.round(basic * rate * 100) / 100;
+  $('tBasic').textContent = rupee.format(basic);
+  $('tSgst').textContent = rupee.format(intra ? half : 0);
+  $('tCgst').textContent = rupee.format(intra ? half : 0);
+  $('tIgst').textContent = rupee.format(intra ? 0 : igst);
+  $('rSgst').style.opacity = $('rCgst').style.opacity = intra ? 1 : 0.4;
+  $('rIgst').style.opacity = intra ? 0.4 : 1;
+  $('tTotal').textContent = '₹' + rupee.format(basic + (intra ? half * 2 : igst));
+  updateBadge();
+}
+
+function updateBadge() {
+  var g = $('gstin').value.trim().toUpperCase();
+  var b = $('stateBadge');
+  if (!g) { b.innerHTML = '<span class="badge">No GST number — treated as Maharashtra unless you change Tax</span>'; return; }
+  var ok = /^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(g);
+  var st = INFO && INFO.states[g.slice(0, 2)];
+  var intra = isIntra();
+  b.innerHTML = '<span class="badge ' + (intra ? 'intra' : 'inter') + '">' +
+    (st || 'Unknown state') + ' → ' + (intra ? 'SGST + CGST' : 'IGST') + '</span>' +
+    (ok ? '' : ' <span class="badge" style="color:var(--err);border-color:var(--err)">' +
+      (g.length < 15 ? g.length + '/15 characters' : 'Check the GST number') + '</span>');
+}
+
+function fillClient(c) {
+  if (c.name) $('name').value = c.name;
+  if (c.address) $('address').value = c.address;
+  if (c.gstin) $('gstin').value = c.gstin;
+  recalc();
+}
+
+$('prev').onchange = function () {
+  var c = INFO.clients[this.value];
+  if (c) { $('name').value = c.name; $('address').value = c.address; $('gstin').value = c.gstin; }
+  else { $('name').value = $('address').value = $('gstin').value = ''; }
+  recalc();
+};
+['gstin', 'taxType'].forEach(function (id) { $(id).addEventListener('input', recalc); $(id).addEventListener('change', recalc); });
+$('addItem').onclick = function () { addItem(); recalc(); };
+$('fileCam').onchange = $('fileAny').onchange = function () { if (this.files[0]) readFile(this.files[0]); this.value = ''; };
+
+/** Shrinks photos (phone cameras make 5–12 MB files) to a JPEG no wider than 2000 px. */
+function prepareFile(file) {
+  return new Promise(function (resolve, reject) {
+    var reader = new FileReader();
+    reader.onerror = function () { reject(new Error('Could not open the file.')); };
+    if (file.type === 'application/pdf' || !/^image\//.test(file.type)) {
+      reader.onload = function () {
+        resolve({ data: reader.result.split(',')[1], mimeType: file.type || 'application/pdf', name: file.name });
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+    reader.onload = function () {
+      var img = new Image();
+      img.onload = function () {
+        var max = 2000, s = Math.min(1, max / Math.max(img.width, img.height));
+        var c = document.createElement('canvas');
+        c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve({ data: c.toDataURL('image/jpeg', 0.88).split(',')[1], mimeType: 'image/jpeg', name: 'photo.jpg' });
+      };
+      img.onerror = function () {
+        resolve({ data: reader.result.split(',')[1], mimeType: file.type, name: file.name });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function readFile(file) {
+  showMsg('Reading ' + (file.name || 'document') + '…', 'info');
+  prepareFile(file).then(function (payload) {
+    return call('readClientFromFile', payload);
+  }).then(function (r) {
+    fillClient(r);
+    $('prev').value = '';
+    if (r.rawText) { $('ocrText').textContent = r.rawText; $('ocrBox').classList.remove('hidden'); }
+    var missing = ['name', 'address', 'gstin'].filter(function (k) { return !r[k]; });
+    showMsg(missing.length
+      ? 'Read with ' + r.source + '. Could not find: ' + missing.join(', ') + ' — please type it in.'
+      : 'Read with ' + r.source + '. Please check the details before creating.', 'info');
+  }).catch(function (e) { showMsg(e.message); });
+}
+
+$('create').onclick = function () {
+  showMsg('');
+  var list = items().map(function (it) { return { desc: it.desc, qty: it.qty, rate: it.rate }; })
+    .filter(function (it) { return it.desc || it.rate; });
+  if (!$('name').value.trim()) { showMsg('Enter the client name.'); $('name').focus(); return; }
+  if (!list.length) { showMsg('Add at least one item with a rate.'); return; }
+  var btn = this;
+  btn.disabled = true; btn.textContent = 'Creating…';
+  call('createInvoice', {
+    name: $('name').value, address: $('address').value, gstin: $('gstin').value,
+    taxType: $('taxType').value, hsn: $('hsn').value, items: list
+  }).then(showResult).catch(function (e) {
+    showMsg(e.message);
+    btn.disabled = false; btn.textContent = 'Create invoice';
+  });
+};
+
+function showResult(r) {
+  $('form').classList.add('hidden');
+  $('meta').textContent = '';
+  var el = $('result');
+  el.classList.remove('hidden');
+  el.innerHTML =
+    '<div style="font-size:34px">✅</div>' +
+    '<div class="big">Invoice ' + r.invoiceNo + ' created</div>' +
+    '<div class="sub">₹' + rupee.format(r.total) + ' incl. ' + (r.intra ? 'SGST + CGST' : 'IGST') +
+      ' · tab "' + r.sheetName + '"</div>' +
+    '<div class="links">' +
+      '<a class="main" href="' + r.pdfUrl + '" target="_blank">⬇ Download PDF</a>' +
+      '<a href="' + r.sheetUrl + '" target="_blank">Open in Google Sheet</a>' +
+      '<button type="button" id="savePdf">Save PDF to Drive (GST Invoices folder)</button>' +
+      '<button type="button" id="again">+ New invoice</button>' +
+    '</div>';
+  $('again').onclick = resetForm;
+  $('savePdf').onclick = function () {
+    var b = this; b.disabled = true; b.textContent = 'Saving…';
+    call('saveInvoicePdf', r.sheetName).then(function (url) {
+      b.outerHTML = '<a href="' + url + '" target="_blank">📁 Saved — open PDF in Drive</a>';
+    }).catch(function (e) { b.disabled = false; b.textContent = 'Save PDF to Drive'; showMsg(e.message); });
+  };
+}
+
+function resetForm() {
+  $('result').classList.add('hidden');
+  $('form').classList.remove('hidden');
+  ['name', 'address', 'gstin'].forEach(function (id) { $(id).value = ''; });
+  $('taxType').value = 'auto';
+  $('items').innerHTML = '';
+  $('prev').innerHTML = '<option value="">— New client —</option>';
+  $('ocrBox').classList.add('hidden');
+  $('create').textContent = 'Create invoice';
+  $('create').disabled = true;
+  $('meta').textContent = 'Loading…';
+  showMsg('');
+  window.scrollTo(0, 0);
+  init();
+}
+
+init();
+</script>
+</body>
+</html>

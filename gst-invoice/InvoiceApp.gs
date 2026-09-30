@@ -39,11 +39,37 @@ var STATES = {
 };
 
 // ---------- Web app ----------
-function doGet() {
-  return HtmlService.createTemplateFromFile('Index').evaluate()
-    .setTitle('GST Invoice')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+function doGet(e) {
+  // Open the web app URL with ?check=1 at the end to see a plain-text health check.
+  if (e && e.parameter && e.parameter.check) return selfCheck_();
+  try {
+    return HtmlService.createTemplateFromFile('Index').evaluate()
+      .setTitle('GST Invoice')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  } catch (err) {
+    return HtmlService.createHtmlOutput('<h3>Invoice app could not start</h3><pre>' +
+      String(err && err.stack || err).replace(/</g, '&lt;') + '</pre>');
+  }
+}
+
+function selfCheck_() {
+  var checks = [
+    ['Running as', function () { return Session.getEffectiveUser().getEmail(); }],
+    ['Time zone', function () { return Session.getScriptTimeZone(); }],
+    ['Open spreadsheet', function () { return book_().getName(); }],
+    ['Summary tab "' + SUMMARY_SHEET + '"', function () { return book_().getSheetByName(SUMMARY_SHEET) ? 'found' : 'MISSING'; }],
+    ['Latest invoice tab', function () { var s = latestInvoiceSheet_(book_()); return s ? s.getName() : 'NONE FOUND'; }],
+    ['Next invoice no', function () { return nextInvoiceNo_(book_(), new Date()); }],
+    ['HTML file "Index"', function () { HtmlService.createTemplateFromFile('Index'); return 'found'; }],
+    ['Drive API service', function () { return typeof Drive !== 'undefined' ? 'added' : 'NOT ADDED (needed to read photos/PDFs)'; }],
+    ['Past clients', function () { return pastClients_(book_()).length; }]
+  ];
+  var lines = checks.map(function (c) {
+    try { return 'OK    ' + c[0] + ': ' + c[1](); }
+    catch (err) { return 'FAIL  ' + c[0] + ': ' + err.message; }
+  });
+  return ContentService.createTextOutput('GST Invoice app - self check\n\n' + lines.join('\n'));
 }
 
 function onOpen() {

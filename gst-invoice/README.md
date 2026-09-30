@@ -36,6 +36,17 @@ or **GST certificate PDF**.
 After you change the code later, use **Deploy → Manage deployments → Edit → Version: New
 version** so the same URL gets the update.
 
+## If the page is blank
+
+1. **Several Google accounts signed in?** This is the most common cause. Open the link in
+   an Incognito/private window and sign in only with the account that owns the sheet.
+2. Add `?check=1` to the end of the web app URL (`.../exec?check=1`). It lists each part of
+   the setup as OK or FAIL.
+3. In the Apps Script editor, pick `getAppInfo` in the function list at the top and click
+   **Run**. Approve the permissions if asked, and read any error in the Execution log.
+4. Changed the code after deploying? Use **Deploy → Manage deployments → ✏ Edit → Version:
+   New version → Deploy**. The `/exec` link only serves the version it was deployed with.
+
 ## Better reading of photos (optional)
 
 Without extra setup, uploads are read with Google's free OCR. This works well for the

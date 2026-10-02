@@ -62,6 +62,8 @@ object SmsParser {
     private val DEBIT_WORDS = Regex(
         """(?i)\b(?:debited|debit(?:ed)? (?:by|for|of|with)|spent|paid|withdrawn|withdrawal|sent|purchase[d]?|""" +
             """payment of|txn of|transaction of|transferred|deducted|charged|used (?:at|for)|dr|""" +
+            // OneCard style: "Your bill of Rs. 141.40 at X has been cleared with your ... Credit Card"
+            """(?:cleared|settled|processed|successful|done|completed) (?:with|using|via|on|from|through)|""" +
             // HDFC card/UPI style: "Txn Rs.84.00 On HDFC Bank Card 0705 At ..." (no verb at all)
             """(?:txn|transaction)(?=\s*(?:amt|amount)?\s*[:.]?\s*(?:rs\.?|inr|₹)))\b"""
     )
@@ -130,6 +132,7 @@ object SmsParser {
     )
 
     private val BANKS: List<Pair<Regex, String>> = listOf(
+        "ONECARD|ONECRD|ONE CREDIT CARD|SIB ONE" to "OneCard",
         "HDFC" to "HDFC Bank",
         "ICICI" to "ICICI Bank",
         "SBICRD|SBI ?CARD" to "SBI Card",
@@ -161,11 +164,11 @@ object SmsParser {
         "AIRTEL ?PAYMENTS|AIRBNK" to "Airtel Payments Bank",
         "JUPITER" to "Jupiter",
         "SLICE" to "slice",
-        "ONECARD|ONECRD" to "OneCard",
         "EQUITAS" to "Equitas Bank",
         "UJJIVAN" to "Ujjivan Bank",
         "BANDHAN" to "Bandhan Bank",
         "SARASWAT" to "Saraswat Bank",
+        "SOUTH INDIAN|SIBSMS|SIBANK" to "South Indian Bank",
         "COSMOS" to "Cosmos Bank",
     ).map { (pattern, name) -> Regex("""(?i)(?:^|[^A-Z])(?:$pattern)""") to name }
 
@@ -173,9 +176,9 @@ object SmsParser {
 
     fun parse(sender: String?, body: String): ParsedSms? {
         val text = body.replace(' ', ' ').replace(Regex("""\s+"""), " ").trim()
-        if (text.isEmpty() || IGNORE.containsMatchIn(text) || isBillReminder(text)) return null
+        if (text.isEmpty() || IGNORE.containsMatchIn(text) || isBillReminder(text) || isAd(text)) return null
 
-        val type = detectType(text) ?: return null
+        val type = detectType(text) ?: spendFallback(text) ?: return null
         val amount = detectAmount(text) ?: return null
         if (amount <= 0.0) return null
 
@@ -212,6 +215,29 @@ object SmsParser {
             availableLimit = LIMIT.find(text)?.groupValues?.get(1)?.let(::toDouble),
         )
     }
+
+    private val PROMO = Regex("""(?i)\b(?:offer|cashback|discount|off on|% off|win|reward points? worth|voucher|coupon|apply|eligible|upgrade)\b""")
+
+    /**
+     * Banks keep inventing wordings ("cleared with", "Txn Rs."…). A message with an amount, a card or
+     * account number and "at <shop>" is a spend even without a known verb, unless it reads like an ad.
+     */
+    private fun spendFallback(text: String): TxnType? {
+        val hasAccount = CARD_NUMBER.containsMatchIn(text) || ACCOUNT_NUMBER.containsMatchIn(text) || MASKED.containsMatchIn(text)
+        val atShop = Regex("""(?i)\bat\s+[a-z]""").containsMatchIn(text)
+        return if (hasAccount && atShop && AMOUNT.containsMatchIn(text) && !PROMO.containsMatchIn(text)) TxnType.DEBIT else null
+    }
+
+    private val AD = Regex(
+        """(?i)\bget\b.{0,40}\b(?:cashback|off|discount|rewards?)\b|\d+\s*%\s*(?:cashback|off|discount)|\bup ?to (?:rs\.?|inr|₹)|""" +
+            """\b(?:shop|book|order|buy) now\b|\bt&c\b|\blimited period\b"""
+    )
+    private val REAL_MONEY_MOVED = Regex(
+        """(?i)\b(?:debited|credited|spent|received|paid|withdrawn|sent|deposited|cleared|refunded|reversed)\b"""
+    )
+
+    /** Marketing SMS quote amounts too ("Get 10% cashback up to Rs 500"); skip them unless money actually moved. */
+    private fun isAd(text: String) = AD.containsMatchIn(text) && !REAL_MONEY_MOVED.containsMatchIn(text)
 
     /** True for card bill / statement reminders (but not "payment received towards your card"). */
     fun isBillReminder(text: String): Boolean =

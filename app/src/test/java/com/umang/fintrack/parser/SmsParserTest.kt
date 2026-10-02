@@ -226,4 +226,28 @@ class SmsParserTest {
         assertEquals("664128756748", p.reference)
         assertEquals("UPI", p.mode)
     }
+
+    @Test
+    fun oneCardBillCleared() {
+        val body = "Your bill of Rs. 141.40 at Archaeological Surv has been cleared with your SIB One Credit Card " +
+            "xxXX6760. To dispute, click: https://1crd.in/OneCrd/HQL"
+        for (sender in listOf(null, "VM-ONECRD")) {
+            val p = SmsParser.parse(sender, body)
+            assertNotNull(p)
+            assertEquals(141.40, p!!.amount, 0.001)
+            assertEquals(TxnType.DEBIT, p.type)
+            assertEquals("OneCard", p.bank)
+            assertEquals("Credit Card", p.instrument)
+            assertEquals("XX6760", p.account)
+            assertEquals("Archaeological Surv", p.merchant)
+        }
+    }
+
+    @Test
+    fun unknownWordingWithCardAndShopIsASpend() {
+        val p = parse("VM-AXISBK", "Rs 250.00 charge approved on Axis Bank Card XX1234 at CROSSWORD BOOKSTORE on 02-10-26.")
+        assertEquals(TxnType.DEBIT, p.type)
+        assertEquals(250.0, p.amount, 0.001)
+        assertNull(SmsParser.parse("VM-AXISBK", "Get 10% cashback up to Rs 500 at Amazon with your Axis Bank Card XX1234!"))
+    }
 }

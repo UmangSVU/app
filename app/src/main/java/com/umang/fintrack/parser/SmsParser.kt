@@ -61,7 +61,9 @@ object SmsParser {
 
     private val DEBIT_WORDS = Regex(
         """(?i)\b(?:debited|debit(?:ed)? (?:by|for|of|with)|spent|paid|withdrawn|withdrawal|sent|purchase[d]?|""" +
-            """payment of|txn of|transaction of|transferred|deducted|charged|used (?:at|for)|dr)\b"""
+            """payment of|txn of|transaction of|transferred|deducted|charged|used (?:at|for)|dr|""" +
+            // HDFC card/UPI style: "Txn Rs.84.00 On HDFC Bank Card 0705 At ..." (no verb at all)
+            """(?:txn|transaction)(?=\s*(?:amt|amount)?\s*[:.]?\s*(?:rs\.?|inr|₹)))\b"""
     )
     private val CREDIT_WORDS = Regex(
         """(?i)\b(?:credited|received|deposited|refund(?:ed)?|added|reversed|reversal|cashback|cr)\b"""
@@ -85,10 +87,10 @@ object SmsParser {
     )
     private val MASKED = Regex("""(?i)(?<![a-z0-9])[x*]{1,}(\d{3,6})\b""")
 
-    private val UPI_ID = Regex("""(?i)(?<![\w.])([a-z0-9][a-z0-9._]{1,}@[a-z]{2,})(?!\w|\.\w)""")
+    private val UPI_ID = Regex("""(?i)(?<![\w.\-])(?:(?:upi|vpa)-)?([a-z0-9][a-z0-9._\-]{1,}@[a-z]{2,})(?!\w|\.\w)""")
 
     private val REFERENCE = Regex(
-        """(?i)\b(?:upi(?=\s*[:/])|upi\s*ref(?:erence)?\.?\s*(?:no\.?|number|id)?|ref(?:erence)?\.?\s*(?:no\.?|number|#|id)?|refno|""" +
+        """(?i)\b(?:upi(?=\s*[:/])|upi(?=\s+\d{9,})|upi\s*ref(?:erence)?\.?\s*(?:no\.?|number|id)?|ref(?:erence)?\.?\s*(?:no\.?|number|#|id)?|refno|""" +
             """rrn|utr(?:\s*no\.?)?|txn\s*(?:id|no\.?|#)|transaction\s*(?:id|no\.?|ref(?:erence)?))\s*[:.#/\-]?\s*""" +
             """([A-Za-z0-9]{6,})"""
     )
@@ -296,7 +298,10 @@ object SmsParser {
         s = s.replace(Regex("""^[A-Z]{2,4}\*"""), "")
         s = s.replace(Regex("""\s+"""), " ")
         if (s.length < 2 || s.count(Char::isLetter) < 2) return null
-        if (BAD_PARTY.containsMatchIn(s)) return null
+        // UPI IDs often carry long numbers (gpay-12196625297@okbizaxi); everything else with one is a ref/account.
+        val isUpi = UPI_ID.matches(s)
+        if (BAD_PARTY.containsMatchIn(if (isUpi) s.substringAfter('@') else s)) return null
+        if (Regex("""(?i)\b(?:card|a/c)\b""").containsMatchIn(s)) return null
         if (Regex("""^\d""").containsMatchIn(s) && !s.contains('@')) return null
         return s.take(40).trim()
     }

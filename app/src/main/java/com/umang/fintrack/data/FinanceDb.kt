@@ -52,6 +52,13 @@ data class Transaction(
             .joinToString(" · ").ifBlank { "Manual entry" }
 }
 
+/** A bank account / card a transaction went through, e.g. HDFC Bank · Card XX0705. */
+data class PayAccount(val bank: String?, val instrument: String?, val account: String?) {
+    val label: String
+        get() = listOfNotNull(bank, listOfNotNull(instrument, account).joinToString(" ").ifBlank { null })
+            .joinToString(" · ").ifBlank { "Unknown account" }
+}
+
 data class Category(val name: String, val emoji: String, val kind: String)
 
 /** Categories that move money between your own accounts and are left out of spend/income totals. */
@@ -200,11 +207,15 @@ class FinanceDb private constructor(context: Context) :
 
     fun insertManual(
         amount: Double, type: TxnType, merchant: String?, category: String, note: String?, sim: Int, myShare: Double?,
+        account: PayAccount?, mode: String? = null,
     ): Long {
         val id = writableDatabase.insert("transactions", null, ContentValues().apply {
             put("timestamp", System.currentTimeMillis()); put("amount", amount); put("type", type.name)
             put("merchant", merchant); put("category", category); put("suggested_category", category)
-            put("note", note); put("pending", 0); put("mode", "Cash"); put("sim", sim); put("my_share", myShare)
+            put("note", note); put("pending", 0); put("sim", sim); put("my_share", myShare)
+            // No bank/card picked means it was paid in cash.
+            put("mode", mode ?: if (account == null) "Cash" else null)
+            put("bank", account?.bank); put("instrument", account?.instrument); put("account", account?.account)
         })
         changed()
         return id
@@ -248,6 +259,29 @@ class FinanceDb private constructor(context: Context) :
         }
         changed()
     }
+
+    /** Changes which bank account / card a transaction went through (null = cash). */
+    fun setAccount(id: Long, account: PayAccount?) {
+        writableDatabase.update("transactions", ContentValues().apply {
+            put("bank", account?.bank); put("instrument", account?.instrument); put("account", account?.account)
+            if (account == null) put("mode", "Cash")
+        }, "id = ?", arrayOf(id.toString()))
+        changed()
+    }
+
+    /** Every bank account / card seen so far, most recently used first. */
+    fun knownAccounts(): List<PayAccount> =
+        readableDatabase.rawQuery(
+            "SELECT bank, instrument, account FROM transactions WHERE bank IS NOT NULL OR account IS NOT NULL " +
+                "GROUP BY bank, instrument, account ORDER BY MAX(timestamp) DESC", null
+        ).use {
+            buildList {
+                while (it.moveToNext()) {
+                    add(PayAccount(if (it.isNull(0)) null else it.getString(0), if (it.isNull(1)) null else it.getString(1),
+                        if (it.isNull(2)) null else it.getString(2)))
+                }
+            }
+        }
 
     /** "Not a transaction": stop asking and leave it out of every total. */
     fun ignore(id: Long) {

@@ -12,8 +12,8 @@ android {
         applicationId = "com.umang.fintrack"
         minSdk = 26
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.5"
+        versionCode = 7
+        versionName = "1.6"
     }
 
     // A fixed key committed to the repo, so every CI build can be installed as an update

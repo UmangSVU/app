@@ -58,6 +58,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.umang.fintrack.data.Category
 import com.umang.fintrack.data.FinanceDb
+import com.umang.fintrack.data.PayAccount
+import com.umang.fintrack.parser.SmsParser
 import com.umang.fintrack.data.kindFor
 import com.umang.fintrack.data.SimBooks
 import com.umang.fintrack.data.Transaction
@@ -140,6 +142,15 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
     var sim by remember(id) { mutableStateOf(SimBooks.selected(context)) }
     var splitOn by remember(id) { mutableStateOf(false) }
     var myShareText by remember(id) { mutableStateOf("") }
+    var payAccount by remember(id) { mutableStateOf<PayAccount?>(null) }
+    var accountChanged by remember(id) { mutableStateOf(false) }
+    var knownAccounts by remember { mutableStateOf<List<PayAccount>>(emptyList()) }
+    var otherAccount by remember(id) { mutableStateOf(false) }
+    var otherBank by remember(id) { mutableStateOf("") }
+    var otherInstrument by remember(id) { mutableStateOf("Bank Account") }
+    var otherDigits by remember(id) { mutableStateOf("") }
+    var pastedSms by remember(id) { mutableStateOf("") }
+    var parsedMode by remember(id) { mutableStateOf<String?>(null) }
     var categoriesVersion by remember { mutableStateOf(0) }
 
     LaunchedEffect(id) {
@@ -154,6 +165,8 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
         sim = t?.sim ?: SimBooks.selected(context)
         splitOn = t?.myShare != null
         myShareText = t?.myShare?.let(::plain) ?: ""
+        payAccount = t?.takeIf { it.bank != null || it.account != null }?.let { PayAccount(it.bank, it.instrument, it.account) }
+        knownAccounts = withContext(Dispatchers.IO) { db.knownAccounts() }
         loaded = true
     }
     LaunchedEffect(id, categoriesVersion) {
@@ -239,6 +252,61 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
                         label = { Text(if (type == TxnType.DEBIT) "Paid to" else "Received from") },
                         singleLine = true, modifier = Modifier.fillMaxWidth(),
                     )
+
+                    Text(if (type == TxnType.DEBIT) "Paid from" else "Received in", style = MaterialTheme.typography.labelMedium)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = payAccount == null && !otherAccount,
+                            onClick = { payAccount = null; otherAccount = false; accountChanged = true },
+                            label = { Text("💵 Cash") },
+                        )
+                        (knownAccounts + listOfNotNull(payAccount)).distinct().forEach { a ->
+                            FilterChip(
+                                selected = payAccount == a && !otherAccount,
+                                onClick = { payAccount = a; otherAccount = false; accountChanged = true },
+                                label = { Text("🏦 " + a.label) },
+                            )
+                        }
+                        FilterChip(selected = otherAccount, onClick = { otherAccount = true; accountChanged = true },
+                            label = { Text("＋ Other") })
+                    }
+                    if (otherAccount) {
+                        OutlinedTextField(value = otherBank, onValueChange = { otherBank = it },
+                            label = { Text("Bank / card issuer (e.g. HDFC Bank)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("Bank Account", "Credit Card", "Debit Card", "UPI", "Wallet").forEach { k ->
+                                FilterChip(selected = otherInstrument == k, onClick = { otherInstrument = k }, label = { Text(k) })
+                            }
+                        }
+                        OutlinedTextField(value = otherDigits, onValueChange = { otherDigits = it.filter(Char::isDigit).take(6) },
+                            label = { Text("Last digits (optional)") }, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                    }
+
+                    if (manual) {
+                        // For an SMS the app couldn't read: paste it and fill everything in from it.
+                        OutlinedTextField(
+                            value = pastedSms, onValueChange = { pastedSms = it },
+                            label = { Text("Or paste the bank SMS here") }, modifier = Modifier.fillMaxWidth(), minLines = 2,
+                        )
+                        if (pastedSms.isNotBlank()) {
+                            TextButton(onClick = {
+                                val p = SmsParser.parse(null, pastedSms)
+                                if (p == null) {
+                                    Toast.makeText(context, "Couldn't read that SMS – please fill in the details", Toast.LENGTH_LONG).show()
+                                } else {
+                                    amountText = plain(p.amount); type = p.type
+                                    merchant = p.merchant ?: merchant
+                                    parsedMode = p.mode
+                                    if (p.bank != null || p.account != null) {
+                                        payAccount = PayAccount(p.bank, p.instrument, p.account); otherAccount = false
+                                    }
+                                    accountChanged = true
+                                    Toast.makeText(context, "Filled in from the SMS", Toast.LENGTH_SHORT).show()
+                                }
+                            }) { Text("Read SMS") }
+                        }
+                    }
                 }
 
                 HorizontalDivider()
@@ -340,14 +408,18 @@ private fun CategorizeScreen(id: Long, onDone: (next: Long?) -> Unit, onClose: (
                         val category = selected ?: return@Button
                         val amount = amountText.toDoubleOrNull() ?: return@Button
                         val share = if (splitOn && type == TxnType.DEBIT) myShare else null
+                        val account = if (otherAccount) {
+                            PayAccount(otherBank.trim().ifBlank { null }, otherInstrument, otherDigits.ifBlank { null }?.let { "XX$it" })
+                        } else payAccount
                         SimBooks.select(context, sim)
                         scope.launch {
                             val next = withContext(Dispatchers.IO) {
                                 if (manual) {
-                                    db.insertManual(amount, type, merchant.ifBlank { null }, category, note.ifBlank { null }, sim, share)
+                                    db.insertManual(amount, type, merchant.ifBlank { null }, category, note.ifBlank { null }, sim, share, account, parsedMode)
                                     null
                                 } else {
                                     db.categorize(id, category, note, amount, merchant, type, rememberChoice, sim, share)
+                                    if (accountChanged) db.setAccount(id, account)
                                     Notifier.cancel(context, id)
                                     if (locked) db.pendingIds().firstOrNull() else null
                                 }

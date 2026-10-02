@@ -209,4 +209,21 @@ class SmsParserTest {
         val p = parse("AD-HDFCBK", "Rs.500.00 spent on HDFC Bank Credit Card XX4321 at ZOMATO on 27-09-26. Avl Lmt Rs.10,000")
         assertEquals(500.0, p.amount, 0.001)
     }
+
+    @Test
+    fun hdfcCardTxnWithoutVerb() {
+        val p = parse(
+            "AD-HDFCBK",
+            "Txn Rs.84.00\nOn HDFC Bank Card 0705\nAt gpay-12196625297@okbizaxi \nby UPI 664128756748\nOn 02-10\n" +
+                "Not You?\nCall 18002586161/SMS BLOCK CC 0705 to 7308080808"
+        )
+        assertEquals(84.0, p.amount, 0.001)
+        assertEquals(TxnType.DEBIT, p.type)
+        assertEquals("HDFC Bank", p.bank)
+        assertEquals("XX0705", p.account)
+        assertEquals("gpay-12196625297@okbizaxi", p.upiId)
+        assertEquals("gpay-12196625297@okbizaxi", p.merchant)
+        assertEquals("664128756748", p.reference)
+        assertEquals("UPI", p.mode)
+    }
 }

@@ -89,6 +89,8 @@ import com.umang.fintrack.parser.CategorySuggester
 import com.umang.fintrack.parser.TxnType
 import com.umang.fintrack.sms.InboxImporter
 import com.umang.fintrack.sms.SmsSync
+import com.umang.fintrack.statement.StatementActivity
+import com.umang.fintrack.statement.StatementPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -149,6 +151,9 @@ private fun MainScreen(resumeTick: Int, openSetup: Boolean) {
     var sim by remember { mutableIntStateOf(SimBooks.selected(context)) }
     var namesVersion by remember { mutableIntStateOf(0) }
     var refreshing by remember { mutableStateOf(false) }
+    val statementPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) context.startActivity(StatementActivity.intent(context, uri))
+    }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(changes, monthOffset, resumeTick, sim) {
@@ -164,6 +169,7 @@ private fun MainScreen(resumeTick: Int, openSetup: Boolean) {
                 TopAppBar(
                     title = { Text("FinTrack") },
                     actions = {
+                        TextButton(onClick = { statementPicker.launch(STATEMENT_TYPES) }) { Text("📄 Statement") }
                         TextButton(enabled = !refreshing, onClick = {
                             refreshing = true
                             scope.launch {
@@ -593,6 +599,7 @@ private fun SetupTab(modifier: Modifier, resumeTick: Int, onNamesChanged: () -> 
                 "\"Allow restricted settings\", then come back and tap Allow again.", style = MaterialTheme.typography.bodySmall)
         }
         item { SimNamesCard(onNamesChanged) }
+        item { StatementCard() }
         item { BackupCard() }
         item {
             Card {
@@ -748,6 +755,51 @@ private fun BackupCard() {
                     "again to keep backing up to the same file.",
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+    }
+}
+
+private val STATEMENT_TYPES = arrayOf("application/pdf", "text/csv", "text/comma-separated-values", "text/plain", "*/*")
+
+@Composable
+private fun StatementCard() {
+    val context = LocalContext.current
+    var name by remember { mutableStateOf(StatementPrefs.name(context)) }
+    var dob by remember { mutableStateOf(StatementPrefs.dob(context)) }
+    var mobile by remember { mutableStateOf(StatementPrefs.mobile(context)) }
+    var extras by remember { mutableStateOf(StatementPrefs.extras(context)) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) context.startActivity(StatementActivity.intent(context, uri))
+    }
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Bank & card statements", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Catch transactions that never came by SMS. Upload a statement (PDF or CSV), or in Gmail open the " +
+                    "statement attachment → Share → FinTrack. Entries already recorded are skipped; missing ones pop up.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(modifier = Modifier.fillMaxWidth(), onClick = { picker.launch(STATEMENT_TYPES) }) { Text("📄 Upload statement") }
+            HorizontalDivider()
+            Text("For password-protected PDFs", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Banks build the password from your name and birth date (e.g. first 4 letters + DDMM). The app tries " +
+                    "the usual patterns, so you rarely need to type it. Saved only on this phone.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name as on card / account") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(value = dob, onValueChange = { dob = it }, label = { Text("Date of birth (DD/MM/YYYY)") },
+                singleLine = true, modifier = Modifier.fillMaxWidth(),
+                isError = dob.isNotBlank() && StatementPrefs.parseDob(dob) == null)
+            OutlinedTextField(value = mobile, onValueChange = { mobile = it.filter(Char::isDigit).take(10) },
+                label = { Text("Mobile number (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(value = extras, onValueChange = { extras = it },
+                label = { Text("Other passwords to try (comma separated, optional)") }, modifier = Modifier.fillMaxWidth())
+            OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                StatementPrefs.save(context, name, dob, mobile, extras)
+                Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
+            }) { Text("Save") }
         }
     }
 }

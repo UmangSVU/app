@@ -40,6 +40,26 @@
             android:turnScreenOn="true"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Statement import: "Share" a PDF/CSV statement from Gmail or Files to FinTrack. -->
+        <activity
+            android:name=".statement.StatementActivity"
+            android:exported="true"
+            android:label="FinTrack: import statement"
+            android:theme="@style/Theme.FinTrack">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/pdf" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="text/comma-separated-values" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".sms.SmsReceiver"
             android:exported="true"

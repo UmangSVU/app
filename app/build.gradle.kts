@@ -12,8 +12,8 @@ android {
         applicationId = "com.umang.fintrack"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.7"
+        versionCode = 9
+        versionName = "1.8"
     }
 
     // A fixed key committed to the repo, so every CI build can be installed as an update
@@ -41,6 +41,12 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    packaging {
+        resources {
+            // BouncyCastle (used by PdfBox for encrypted PDFs) ships duplicate metadata files.
+            excludes += setOf("META-INF/versions/9/OSGI-INF/MANIFEST.MF", "META-INF/DEPENDENCIES")
+        }
+    }
     buildFeatures {
         compose = true
     }
@@ -54,6 +60,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    // Reads (password-protected) PDF statements on the phone.
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")

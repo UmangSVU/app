@@ -272,6 +272,9 @@ object SmsParser {
         return AMOUNT_NO_CURRENCY.find(text)?.groupValues?.get(1)?.let(::toDouble)
     }
 
+    /** Bank / card issuer named anywhere in [text] (used for statements too). */
+    fun bankIn(text: String): String? = detectBank(null, text)
+
     private fun detectBank(sender: String?, text: String): String? {
         val s = sender?.uppercase()?.let { " $it" }
         if (s != null) BANKS.firstOrNull { it.first.containsMatchIn(s) }?.let { return it.second }

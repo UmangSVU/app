@@ -38,6 +38,11 @@ debit and credit under a category.
   own and left out of the totals.
 - **Categories are split into Spending and Income.** The pop-up only offers the ones that
   match a debit or a credit.
+- **Statements catch what SMS missed**: upload a bank or credit card statement (PDF or CSV),
+  or share the attachment from Gmail to FinTrack. Rows already recorded (same amount, within a
+  few days) are skipped; missing ones are added and pop up for a category. Password-protected
+  PDFs are opened with the usual bank patterns built from the name and date of birth saved in
+  Setup (e.g. first 4 letters + DDMM), or a password you type.
 - **Daily backup to Google Drive**: link a Drive file once in Setup, and at about 9 PM each
   day the app replaces that one file (the Drive app uploads it). The same single file is kept
   in Downloads/FinTrack. On a new phone, **Setup → Restore from backup file** merges it in.

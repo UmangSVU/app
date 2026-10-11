@@ -6,6 +6,8 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.umang.fintrack.parser.CategorySuggester
+import com.umang.fintrack.parser.ParsedSms
+import com.umang.fintrack.parser.ParsedStatement
 import com.umang.fintrack.parser.SmsParser
 import com.umang.fintrack.parser.TxnType
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -343,6 +345,56 @@ class FinanceDb private constructor(context: Context) :
         writableDatabase.delete("categories", "name = ?", arrayOf(name))
         writableDatabase.delete("merchant_rules", "category = ?", arrayOf(name))
         changed()
+    }
+
+    // ---------- Statements ----------
+
+    data class StatementResult(val total: Int, val alreadyRecorded: Int, val added: List<Long>)
+
+    /**
+     * Compares a statement with what is already recorded. A row counts as recorded when an entry
+     * of the same type and amount exists within a few days (bank posting dates lag the SMS) —
+     * including entries marked "not counted". Each entry is matched at most once, so two ₹50
+     * payments on one day need two entries. Unmatched rows are added as pending (they pop up).
+     */
+    fun importStatement(st: ParsedStatement, fallbackSim: Int): StatementResult {
+        val used = mutableSetOf<Long>()
+        val added = mutableListOf<Long>()
+        var matched = 0
+        val day = 24L * 60 * 60 * 1000
+        // Same card/account's book if we've seen it before, else the book on screen.
+        val sim = st.account?.let { acct ->
+            readableDatabase.rawQuery("SELECT sim FROM transactions WHERE account = ? ORDER BY timestamp DESC LIMIT 1", arrayOf(acct))
+                .use { if (it.moveToFirst()) it.getInt(0) else null }
+        } ?: fallbackSim
+
+        for (t in st.txns) {
+            val match = readableDatabase.rawQuery(
+                "SELECT id FROM transactions WHERE type = ? AND ABS(amount - ?) < 0.011 AND timestamp >= ? AND timestamp < ? " +
+                    "ORDER BY CASE WHEN account = ? THEN 0 ELSE 1 END, ABS(timestamp - ?)",
+                arrayOf(t.type.name, t.amount.toString(), (t.date - 3 * day).toString(), (t.date + 4 * day).toString(),
+                    st.account ?: "", (t.date + day / 2).toString())
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }.firstOrNull { it !in used }
+            if (match != null) {
+                used += match; matched++; continue
+            }
+
+            val parsed = ParsedSms(t.amount, t.type, st.bank, st.account, st.instrument, null, t.description, null, null, null, null)
+            val learned = CategorySuggester.merchantKey(parsed)?.let { learnedCategory(ruleKey(sim, it)) }
+            val suggested = CategorySuggester.suggest(parsed, t.description, learned)
+            val id = writableDatabase.insertWithOnConflict("transactions", null, ContentValues().apply {
+                put("sms_hash", hash("stmt|${st.bank}|${st.account}|${t.date}|${t.amount}|${t.type}|${t.description}"))
+                put("sender", "Statement"); put("body", "From ${st.bank ?: "bank"} statement: ${t.raw}")
+                // Midday, so the day shows correctly in every time zone the phone may be in.
+                put("timestamp", t.date + day / 2); put("amount", t.amount); put("type", t.type.name)
+                put("bank", st.bank); put("account", st.account); put("instrument", st.instrument)
+                put("merchant", t.description); put("sim", sim)
+                put("suggested_category", suggested); put("pending", 1)
+            }, SQLiteDatabase.CONFLICT_IGNORE)
+            if (id != -1L) { added += id; used += id } else matched++
+        }
+        if (added.isNotEmpty()) changed()
+        return StatementResult(st.txns.size, matched, added)
     }
 
     // ---------- Backup / restore ----------

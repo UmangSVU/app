@@ -357,16 +357,24 @@ class FinanceDb private constructor(context: Context) :
      * including entries marked "not counted". Each entry is matched at most once, so two ₹50
      * payments on one day need two entries. Unmatched rows are added as pending (they pop up).
      */
-    fun importStatement(st: ParsedStatement, fallbackSim: Int): StatementResult {
+    /**
+     * The book this card / account's transactions usually go to: exact masked number first, then
+     * the last 3 digits (some banks show 3 digits in SMS but 4 in statements). Null if never seen.
+     */
+    fun bookForAccount(account: String?): Int? {
+        val digits = account?.filter(Char::isDigit)?.takeIf { it.length >= 3 } ?: return null
+        fun query(where: String, arg: String) = readableDatabase.rawQuery(
+            "SELECT sim FROM transactions WHERE $where ORDER BY timestamp DESC LIMIT 1", arrayOf(arg)
+        ).use { if (it.moveToFirst()) it.getInt(0) else null }
+        return query("account = ?", account) ?: query("account LIKE ?", "%" + digits.takeLast(3))
+    }
+
+    /** Adds the statement's missing rows to book [sim] (chosen by you on the import screen). */
+    fun importStatement(st: ParsedStatement, sim: Int): StatementResult {
         val used = mutableSetOf<Long>()
         val added = mutableListOf<Long>()
         var matched = 0
         val day = 24L * 60 * 60 * 1000
-        // Same card/account's book if we've seen it before, else the book on screen.
-        val sim = st.account?.let { acct ->
-            readableDatabase.rawQuery("SELECT sim FROM transactions WHERE account = ? ORDER BY timestamp DESC LIMIT 1", arrayOf(acct))
-                .use { if (it.moveToFirst()) it.getInt(0) else null }
-        } ?: fallbackSim
 
         for (t in st.txns) {
             val match = readableDatabase.rawQuery(

@@ -14,6 +14,21 @@ the rest:
 | Layout, logo, bank details, amount in words | Copied from the latest invoice tab |
 | Summary tab | A new row is added for each invoice |
 
+## Tax invoice or proforma
+
+A switch at the top of the form picks the document type:
+
+| | Tax Invoice | Proforma Invoice |
+|---|---|---|
+| Heading on the page | Invoice | Proforma Invoice |
+| Number | `2627/38`, `2627/39`, … | `PI-2627/01`, `PI-2627/02`, … (its own series) |
+| Tab name | `2627_38` | `PI_2627_01` |
+| Added to Summary | Yes | No (a proforma isn't a tax invoice) |
+
+When the client confirms, switch to **Tax Invoice** and pick the proforma under **Make this
+invoice from a proforma**. The client, items and tax are copied in, and a normal tax invoice
+number is used.
+
 Client details can be typed in, picked from earlier invoices, or read from a **photo**
 or **GST certificate PDF**.
 

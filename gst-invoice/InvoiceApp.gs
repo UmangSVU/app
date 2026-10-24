@@ -25,6 +25,14 @@ var CLAUDE_MODEL = 'claude-opus-5-5';
 
 var GSTIN_RE = /\b(\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z])\b/;
 var INVOICE_SHEET_RE = /^(\d{4})_(\d+)$/;
+var PROFORMA_PREFIX = 'PI';          // proforma numbers look like PI-2627/01, tabs like PI_2627_01
+var PROFORMA_SHEET_RE = /^PI_(\d{4})_(\d+)$/;
+
+// Heading and label cells, per document type.
+var DOC_TYPES = {
+  invoice: { title: 'Invoice', noLabel: 'INVOICE NO:', dateLabel: 'INVOICE DATE :', pdfName: 'Invoice' },
+  proforma: { title: 'Proforma Invoice', noLabel: 'PROFORMA NO:', dateLabel: 'DATE :', pdfName: 'Proforma' }
+};
 
 var STATES = {
   '01': 'Jammu & Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh',
@@ -61,6 +69,7 @@ function selfCheck_() {
     ['Summary tab "' + SUMMARY_SHEET + '"', function () { return book_().getSheetByName(SUMMARY_SHEET) ? 'found' : 'MISSING'; }],
     ['Latest invoice tab', function () { var s = latestInvoiceSheet_(book_()); return s ? s.getName() : 'NONE FOUND'; }],
     ['Next invoice no', function () { return nextInvoiceNo_(book_(), new Date()); }],
+    ['Next proforma no', function () { return nextProformaNo_(book_(), new Date()); }],
     ['HTML file "Index"', function () { HtmlService.createTemplateFromFile('Index'); return 'found'; }],
     ['Drive API service', function () { return typeof Drive !== 'undefined' ? 'added' : 'NOT ADDED (needed to read photos/PDFs)'; }],
     ['Past clients', function () { return pastClients_(book_()).length; }]
@@ -84,6 +93,7 @@ function getAppInfo() {
   var ss = book_();
   return {
     nextInvoiceNo: nextInvoiceNo_(ss, today),
+    nextProformaNo: nextProformaNo_(ss, today),
     today: Utilities.formatDate(today, tz_(), 'd-MMM-yyyy'),
     hsn: DEFAULT_HSN,
     homeStateCode: HOME_STATE_CODE,
@@ -91,13 +101,15 @@ function getAppInfo() {
     maxItems: MAX_ITEMS,
     states: STATES,
     clients: pastClients_(ss),
+    proformas: listProformas_(ss),
     aiReader: !!claudeKey_()
   };
 }
 
 /**
- * Creates the invoice tab and its Summary row.
- * data: {name, address, gstin, taxType: 'auto'|'intra'|'inter', hsn, items: [{desc, qty, rate}]}
+ * Creates the invoice (or proforma) tab. Tax invoices also get a Summary row.
+ * data: {docType: 'invoice'|'proforma', name, address, gstin, taxType: 'auto'|'intra'|'inter',
+ *        hsn, items: [{desc, qty, rate}]}
  */
 function createInvoice(data) {
   var name = String(data.name || '').trim();
@@ -119,20 +131,27 @@ function createInvoice(data) {
   });
 
   var intra = isIntraState_(gstin, data.taxType);
+  var proforma = data.docType === 'proforma';
+  var doc = DOC_TYPES[proforma ? 'proforma' : 'invoice'];
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
     var ss = book_();
     var today = new Date();
-    var invoiceNo = nextInvoiceNo_(ss, today);
-    var sheetName = invoiceNo.replace('/', '_');
+    var invoiceNo = proforma ? nextProformaNo_(ss, today) : nextInvoiceNo_(ss, today);
+    var sheetName = invoiceNo.replace(/[\/-]/g, '_');
 
     var template = latestInvoiceSheet_(ss);
     if (!template) throw new Error('No existing invoice tab (like 2627_30) to copy the layout from.');
     var sh = template.copyTo(ss).setName(sheetName);
     ss.setActiveSheet(sh);
     ss.moveActiveSheet(ss.getNumSheets());
+
+    // Always set the heading and labels: the copied tab may be of the other type.
+    sh.getRange('A9').setValue(doc.title);
+    sh.getRange('E11').setValue(doc.noLabel);
+    sh.getRange('E13').setValue(doc.dateLabel);
 
     var clientBlock = name + '\n' + address + (gstin ? '\n\nGST - ' + gstin : '');
     sh.getRange('A11').setValue(clientBlock);
@@ -164,7 +183,7 @@ function createInvoice(data) {
     sh.getRange('F25').setFormula('=ROUND($F$22*E25,2)');
     sh.getRange('F26').setFormula('=SUM(F22:F25)');
 
-    addSummaryRow_(ss, sheetName);
+    if (!proforma) addSummaryRow_(ss, sheetName);
     SpreadsheetApp.flush();
     CacheService.getScriptCache().remove('clients');
 
@@ -173,6 +192,8 @@ function createInvoice(data) {
     var gid = sh.getSheetId();
     return {
       invoiceNo: invoiceNo,
+      docType: proforma ? 'proforma' : 'invoice',
+      docTitle: doc.title,
       sheetName: sheetName,
       intra: intra,
       basic: basic,
@@ -193,7 +214,8 @@ function saveInvoicePdf(sheetName) {
   if (!sh) throw new Error('Invoice tab ' + sheetName + ' not found.');
   var blob = UrlFetchApp.fetch(pdfUrl_(ss.getId(), sh.getSheetId()), {
     headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }
-  }).getBlob().setName('Invoice ' + sheetName + '.pdf');
+  }).getBlob().setName((PROFORMA_SHEET_RE.test(sheetName) ? DOC_TYPES.proforma : DOC_TYPES.invoice).pdfName +
+    ' ' + sheetName + '.pdf');
   var folders = DriveApp.getFoldersByName('GST Invoices');
   var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder('GST Invoices');
   var file = folder.createFile(blob);
@@ -469,6 +491,48 @@ function nextInvoiceNoFrom(values, prefix) {
   return prefix + '/' + String(n).padStart(2, '0');
 }
 
+/** Next proforma number for this financial year: PI-2627/01, PI-2627/02, ... */
+function nextProformaNo_(ss, today) {
+  var names = ss.getSheets().map(function (s) { return s.getName(); });
+  return nextProformaNoFrom(names, fyPrefix(today));
+}
+
+/** Pure helper (testable): given tab names like "PI_2627_04". */
+function nextProformaNoFrom(names, prefix) {
+  var max = 0;
+  names.forEach(function (n) {
+    var m = String(n).match(PROFORMA_SHEET_RE);
+    if (m && m[1] === prefix) max = Math.max(max, Number(m[2]));
+  });
+  return PROFORMA_PREFIX + '-' + prefix + '/' + String(max + 1).padStart(2, '0');
+}
+
+/** Recent proformas (newest first) with their client and items, so one can be turned into a tax invoice. */
+function listProformas_(ss) {
+  var out = [];
+  ss.getSheets().slice().reverse().forEach(function (s) {
+    if (out.length >= 25 || !PROFORMA_SHEET_RE.test(s.getName())) return;
+    var v = s.getRange(11, 1, FIRST_ITEM_ROW + MAX_ITEMS - 11, 6).getValues();   // A11:F21
+    var e = s.getRange('E23:E25').getValues();
+    var client = parseClientBlock(String(v[0][0] || ''));
+    var items = [];
+    var hsn = '';
+    for (var r = FIRST_ITEM_ROW - 11; r < v.length; r++) {
+      if (String(v[r][0]).trim() === '' && !Number(v[r][4])) continue;
+      items.push({ desc: String(v[r][0]).trim(), qty: Number(v[r][3]) || 1, rate: Number(v[r][4]) || 0 });
+      if (!hsn && v[r][2] !== '') hsn = String(v[r][2]);
+    }
+    out.push({
+      no: String(v[0][5]),
+      sheetName: s.getName(),
+      name: client.name, address: client.address, gstin: client.gstin,
+      taxType: Number(e[2][0]) > 0 ? 'inter' : 'intra',
+      hsn: hsn, items: items
+    });
+  });
+  return out;
+}
+
 function latestInvoiceSheet_(ss) {
   var best = null, bestKey = -1;
   ss.getSheets().forEach(function (s) {
@@ -496,7 +560,7 @@ function pastClients_(ss) {
   var byKey = {};
   var list = [];
   ss.getSheets().slice().reverse().forEach(function (s) {
-    if (!INVOICE_SHEET_RE.test(s.getName())) return;
+    if (!INVOICE_SHEET_RE.test(s.getName()) && !PROFORMA_SHEET_RE.test(s.getName())) return;
     var c = parseClientBlock(String(s.getRange('A11').getValue() || ''));
     if (!c.name) return;
     var key = (c.gstin || c.name).toUpperCase();

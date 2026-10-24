@@ -34,6 +34,9 @@
     background: var(--card); color: var(--text); cursor: pointer; }
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; width: 100%; padding: 13px; font-size: 16px; }
   button:disabled { opacity: .55; cursor: default; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; background: var(--card); margin-bottom: 14px; }
+  .seg button { flex: 1; border: none; border-radius: 8px; padding: 10px 6px; background: none; color: var(--muted); font-weight: 600; }
+  .seg button.on { background: var(--accent); color: var(--accent-text); }
   .upload { display: flex; gap: 8px; flex-wrap: wrap; }
   .upload label.btn { display: inline-flex; align-items: center; margin: 0; padding: 10px 14px; border: 1px dashed var(--accent);
     border-radius: 8px; color: var(--accent); cursor: pointer; font-size: 14px; }
@@ -66,11 +69,20 @@
 </head>
 <body>
 <main>
-  <h1>New GST Invoice</h1>
+  <h1 id="heading">New Tax Invoice</h1>
   <div class="sub" id="meta">Loading…</div>
   <div id="msg" class="msg"></div>
 
   <div id="form">
+    <div class="seg" role="tablist">
+      <button type="button" id="tInvoice" class="on" role="tab" aria-selected="true">Tax Invoice</button>
+      <button type="button" id="tProforma" role="tab" aria-selected="false">Proforma Invoice</button>
+    </div>
+    <div class="card hidden" id="fromPiCard">
+      <label for="fromPi" style="margin-top:0">Make this invoice from a proforma (optional)</label>
+      <select id="fromPi"><option value="">— Don't use a proforma —</option></select>
+      <div class="hint">Copies the client, items and tax from the proforma. You can still change anything.</div>
+    </div>
     <div class="card">
       <h2>Client</h2>
       <div class="upload">
@@ -119,7 +131,7 @@
       </table>
     </div>
 
-    <button class="primary" id="create" disabled>Create invoice</button>
+    <button class="primary" id="create" disabled>Create tax invoice</button>
   </div>
 
   <div id="result" class="card done hidden"></div>
@@ -127,6 +139,7 @@
 
 <script>
 var INFO = null;
+var DOC = 'invoice';   // 'invoice' or 'proforma'
 var rupee = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 var $ = function (id) { return document.getElementById(id); };
 
@@ -149,7 +162,13 @@ function call(fn) {
 function init() {
   call('getAppInfo').then(function (info) {
     INFO = info;
-    $('meta').textContent = 'Invoice ' + info.nextInvoiceNo + ' · ' + info.today;
+    (info.proformas || []).forEach(function (p, i) {
+      var o = document.createElement('option');
+      o.value = i;
+      o.textContent = p.no + ' · ' + p.name;
+      $('fromPi').appendChild(o);
+    });
+    setDoc(DOC);
     $('hsn').value = info.hsn;
     $('readerHint').textContent = info.aiReader
       ? 'Reads name, address and GST number with Claude (GST certificate, visiting card, letterhead, photo).'
@@ -168,6 +187,38 @@ function init() {
     showMsg('Could not load: ' + e.message);
   });
 }
+
+function setDoc(type) {
+  DOC = type;
+  var pi = type === 'proforma';
+  $('tInvoice').classList.toggle('on', !pi);
+  $('tProforma').classList.toggle('on', pi);
+  $('tInvoice').setAttribute('aria-selected', String(!pi));
+  $('tProforma').setAttribute('aria-selected', String(pi));
+  $('heading').textContent = pi ? 'New Proforma Invoice' : 'New Tax Invoice';
+  $('create').textContent = pi ? 'Create proforma' : 'Create tax invoice';
+  $('fromPiCard').classList.toggle('hidden', pi || !INFO || !(INFO.proformas || []).length);
+  if (INFO) {
+    $('meta').textContent = (pi ? 'Proforma ' + INFO.nextProformaNo : 'Invoice ' + INFO.nextInvoiceNo) +
+      ' · ' + INFO.today + (pi ? ' · not added to Summary' : '');
+  }
+}
+
+$('tInvoice').onclick = function () { showMsg(''); setDoc('invoice'); };
+$('tProforma').onclick = function () { showMsg(''); $('fromPi').value = ''; setDoc('proforma'); };
+
+$('fromPi').onchange = function () {
+  var p = INFO.proformas[this.value];
+  if (!p) return;
+  $('prev').value = '';
+  $('name').value = p.name; $('address').value = p.address; $('gstin').value = p.gstin;
+  $('taxType').value = p.taxType;
+  if (p.hsn) $('hsn').value = p.hsn;
+  $('items').innerHTML = '';
+  (p.items.length ? p.items : [{}]).forEach(function (it) { addItem(it.desc, it.qty, it.rate); });
+  recalc();
+  showMsg('Copied from proforma ' + p.no + '. Check the details, then create the tax invoice.', 'info');
+};
 
 function addItem(desc, qty, rate) {
   var n = $('items').children.length;
@@ -324,11 +375,12 @@ $('create').onclick = function () {
   var btn = this;
   btn.disabled = true; btn.textContent = 'Creating…';
   call('createInvoice', {
+    docType: DOC,
     name: $('name').value, address: $('address').value, gstin: $('gstin').value,
     taxType: $('taxType').value, hsn: $('hsn').value, items: list
   }).then(showResult).catch(function (e) {
     showMsg(e.message);
-    btn.disabled = false; btn.textContent = 'Create invoice';
+    btn.disabled = false; setDoc(DOC);
   });
 };
 
@@ -339,14 +391,14 @@ function showResult(r) {
   el.classList.remove('hidden');
   el.innerHTML =
     '<div style="font-size:34px">✅</div>' +
-    '<div class="big">Invoice ' + r.invoiceNo + ' created</div>' +
+    '<div class="big">' + r.docTitle + ' ' + r.invoiceNo + ' created</div>' +
     '<div class="sub">₹' + rupee.format(r.total) + ' incl. ' + (r.intra ? 'SGST + CGST' : 'IGST') +
       ' · tab "' + r.sheetName + '"</div>' +
     '<div class="links">' +
       '<a class="main" href="' + r.pdfUrl + '" target="_blank">⬇ Download PDF</a>' +
       '<a href="' + r.sheetUrl + '" target="_blank">Open in Google Sheet</a>' +
       '<button type="button" id="savePdf">Save PDF to Drive (GST Invoices folder)</button>' +
-      '<button type="button" id="again">+ New invoice</button>' +
+      '<button type="button" id="again">+ New invoice / proforma</button>' +
     '</div>';
   $('again').onclick = resetForm;
   $('savePdf').onclick = function () {
@@ -364,8 +416,9 @@ function resetForm() {
   $('taxType').value = 'auto';
   $('items').innerHTML = '';
   $('prev').innerHTML = '<option value="">— New client —</option>';
+  $('fromPi').innerHTML = '<option value="">— Don\'t use a proforma —</option>';
+  $('fromPiCard').classList.add('hidden');
   $('ocrBox').classList.add('hidden');
-  $('create').textContent = 'Create invoice';
   $('create').disabled = true;
   $('meta').textContent = 'Loading…';
   showMsg('');
